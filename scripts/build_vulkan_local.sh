@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Heretek AI
-# Local Vulkan build helper for CachyLLama
+# =============================================================================
+# CachyLLama-BUILDER: Local Linux Vulkan Build Script
+# =============================================================================
+# Builds fewtarius/CachyLLama with Vulkan (RADV) backend locally on Linux.
+#
+# Vulkan (RADV) is the recommended backend for AMD APUs (Strix Halo, Strix Point,
+# Phoenix, Steam Deck) for maximum stability without needing ROCm DKMS drivers.
+#
+# Usage:
+#   ./scripts/build_vulkan_local.sh
+# =============================================================================
 
 set -euo pipefail
 
@@ -11,13 +21,15 @@ BUILD_DIR="$ROOT_DIR/build-vulkan"
 SRC_DIR="${SRC_DIR:-$ROOT_DIR/CachyLLama}"
 
 if [ ! -d "$SRC_DIR" ]; then
-    echo "[INFO] Cloning fewtarius/CachyLLama..."
+    echo "[INFO] CachyLLama source not found at $SRC_DIR. Cloning from GitHub..."
     git clone --depth 1 https://github.com/fewtarius/CachyLLama.git "$SRC_DIR"
 fi
 
-echo "[INFO] Building CachyLLama with Vulkan backend..."
-echo "[INFO] Source: $SRC_DIR"
-echo "[INFO] Build Dir: $BUILD_DIR"
+echo "========================================================================"
+echo " Building CachyLLama (Vulkan Backend)"
+echo " Source Path: $SRC_DIR"
+echo " Output Dir:  $BUILD_DIR"
+echo "========================================================================"
 
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
@@ -37,4 +49,4 @@ cmake "$SRC_DIR" -G Ninja \
 
 ninja -j"$(nproc)"
 
-echo "[OK] Vulkan build completed successfully in $BUILD_DIR/bin"
+echo "[OK] Vulkan build completed successfully! Binaries are in: $BUILD_DIR/bin"

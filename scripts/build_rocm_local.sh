@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Heretek AI
-# Local ROCm build helper for CachyLLama
+# =============================================================================
+# CachyLLama-BUILDER: Local Linux ROCm Build Script
+# =============================================================================
+# Builds fewtarius/CachyLLama with ROCm/HIP acceleration locally on a Linux workstation.
+#
+# Usage:
+#   ./scripts/build_rocm_local.sh [GFX_TARGET]
+#
+# Examples:
+#   ./scripts/build_rocm_local.sh gfx1151   # Strix Halo (8060S)
+#   ./scripts/build_rocm_local.sh gfx1150   # Strix Point (890M)
+#   ./scripts/build_rocm_local.sh gfx1100   # RX 7900 XTX / 7900 XT
+#   ./scripts/build_rocm_local.sh gfx1103   # Phoenix (780M / 7840U)
+# =============================================================================
 
 set -euo pipefail
 
@@ -13,14 +26,23 @@ ROCM_PATH="${ROCM_PATH:-/opt/rocm}"
 GFX_TARGET="${1:-gfx1151}"
 
 if [ ! -d "$SRC_DIR" ]; then
-    echo "[INFO] Cloning fewtarius/CachyLLama..."
+    echo "[INFO] CachyLLama source not found at $SRC_DIR. Cloning from GitHub..."
     git clone --depth 1 https://github.com/fewtarius/CachyLLama.git "$SRC_DIR"
 fi
 
-echo "[INFO] Building CachyLLama with ROCm for target: $GFX_TARGET"
-echo "[INFO] ROCm Path: $ROCM_PATH"
-echo "[INFO] Source: $SRC_DIR"
-echo "[INFO] Build Dir: $BUILD_DIR"
+if [ ! -d "$ROCM_PATH" ]; then
+    echo "[ERROR] ROCm toolchain directory not found at $ROCM_PATH."
+    echo "[HINT] Install ROCm or download an AMD TheRock multi-arch nightly SDK into /opt/rocm."
+    exit 1
+fi
+
+echo "========================================================================"
+echo " Building CachyLLama (ROCm / HIP)"
+echo " GFX Target:  $GFX_TARGET"
+echo " ROCm Path:   $ROCM_PATH"
+echo " Source Path: $SRC_DIR"
+echo " Output Dir:  $BUILD_DIR"
+echo "========================================================================"
 
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
@@ -45,4 +67,4 @@ cmake "$SRC_DIR" -G Ninja \
 
 ninja -j"$(nproc)"
 
-echo "[OK] Build completed successfully in $BUILD_DIR/bin"
+echo "[OK] ROCm build completed successfully! Binaries are in: $BUILD_DIR/bin"
