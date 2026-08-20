@@ -1,0 +1,55 @@
+# Build outputs and intermediate files
+build/
+bin/
+dist/
+out/
+all-artifacts/
+llama-binaries/
+
+# Archives and binaries
+*.zip
+*.tar.gz
+*.tar.xz
+*.7z
+*.dll
+*.so
+*.so.*
+*.dylib
+*.exe
+
+# Model weights
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# ROCm SDK tarballs and temporary caches
+rocm.tar.gz
+rocm/
+opt/
+deps/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Local cloned subrepositories (kept for local development/reference)
+CachyLLama/
+llama-ai/
+llama.cpp/
+llamacpp-rocm/
+
+# Traffic and IDE files
+mitm_mcp_traffic.db
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Temporary test logs
+stdout.txt
+stderr.txt
+llama_output.txt
+vs_path.txt
+build-summary-*.md

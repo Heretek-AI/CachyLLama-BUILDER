@@ -1,0 +1,554 @@
+name: Build CachyLLama + ROCm Nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      operating_systems:
+        description: 'Operating systems to build for (comma-separated: windows,ubuntu)'
+        required: false
+        default: 'windows,ubuntu'
+      gfx_target:
+        description: 'AMD GPU targets (comma-separated: gfx1151,gfx1150,gfx120X,gfx110X,gfx103X,gfx90a,gfx908)'
+        required: false
+        default: 'gfx1151,gfx1150,gfx120X,gfx110X,gfx103X,gfx90a,gfx908'
+      rocm_version:
+        description: 'ROCm version to use or "latest" to auto-detect from AMD TheRock'
+        required: false
+        default: 'latest'
+      cachyllama_version:
+        description: 'CachyLLama version (branch, tag, or commit hash)'
+        required: false
+        default: 'master'
+      create_release:
+        description: 'Create a GitHub release after successful build'
+        required: false
+        default: true
+        type: boolean
+
+  # Trigger on pull requests modifying workflow or scripts
+  pull_request:
+    paths:
+      - '.github/workflows/build-cachyllama-rocm.yml'
+      - '.github/actions/**'
+      - 'scripts/**'
+
+  # Trigger nightly (1:00 PM UTC = 5:00 AM PST, ~2 hours after ROCm nightly tarballs are published)
+  schedule:
+    - cron: '0 13 * * *'
+
+env:
+  OPERATING_SYSTEMS: ${{ github.event.inputs.operating_systems || 'windows,ubuntu' }}
+  GFX_TARGETS: ${{ github.event.inputs.gfx_target || 'gfx1151,gfx1150,gfx120X,gfx110X,gfx103X,gfx90a,gfx908' }}
+  ROCM_VERSION: ${{ github.event.inputs.rocm_version || 'latest' }}
+  CACHYLLAMA_VERSION: ${{ github.event.inputs.cachyllama_version || 'master' }}
+  CACHYLLAMA_REPO: 'https://github.com/fewtarius/CachyLLama.git'
+
+jobs:
+  prepare-matrix:
+    runs-on: ubuntu-22.04
+    outputs:
+      windows_matrix: ${{ steps.set-matrix.outputs.windows_matrix }}
+      ubuntu_matrix: ${{ steps.set-matrix.outputs.ubuntu_matrix }}
+      should_build_windows: ${{ steps.set-matrix.outputs.should_build_windows }}
+      should_build_ubuntu: ${{ steps.set-matrix.outputs.should_build_ubuntu }}
+    steps:
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          targets="${{ env.GFX_TARGETS }}"
+          operating_systems="${{ env.OPERATING_SYSTEMS }}"
+          
+          echo "Input targets: $targets"
+          echo "Input operating systems: $operating_systems"
+
+          # Convert comma-separated targets into JSON array
+          matrix_targets=$(echo "$targets" \
+            | tr ',' '\n' \
+            | sed 's/^ *//;s/ *$//' \
+            | sed 's/^"//;s/"$//' \
+            | jq -R . \
+            | jq -s '{gfx_target: .}' \
+            | jq -c)
+
+          should_build_windows="false"
+          should_build_ubuntu="false"
+          
+          if [[ "$operating_systems" == *"windows"* ]]; then
+            should_build_windows="true"
+            echo "windows_matrix=$matrix_targets" >> $GITHUB_OUTPUT
+          fi
+          
+          if [[ "$operating_systems" == *"ubuntu"* ]]; then
+            should_build_ubuntu="true"
+            echo "ubuntu_matrix=$matrix_targets" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "should_build_windows=$should_build_windows" >> $GITHUB_OUTPUT
+          echo "should_build_ubuntu=$should_build_ubuntu" >> $GITHUB_OUTPUT
+          
+          echo "Windows build: $should_build_windows"
+          echo "Ubuntu build: $should_build_ubuntu"
+          echo "Generated matrix: $matrix_targets"
+
+  build-windows:
+    # Pinned to windows-2022 (VS 2022 / MSVC 14.4x) to avoid MSVC 14.51 <cmath> constexpr collision
+    runs-on: windows-2022
+    needs: prepare-matrix
+    if: needs.prepare-matrix.outputs.should_build_windows == 'true'
+    strategy:
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.windows_matrix) }}
+      fail-fast: false
+    outputs:
+      rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
+      cachyllama_commit_hash: ${{ steps.set-outputs.outputs.cachyllama_commit_hash }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Clean up existing directories
+        shell: powershell
+        run: |
+          if (Test-Path "CachyLLama") { Remove-Item -Recurse -Force "CachyLLama" }
+          if (Test-Path "C:\opt\rocm") { Remove-Item -Recurse -Force "C:\opt\rocm" }
+          if (Test-Path "rocm.tar.gz") { Remove-Item -Force "rocm.tar.gz" }
+          Write-Host "Cleanup completed"
+
+      - name: Install Visual Studio Build Tools
+        shell: powershell
+        run: |
+          $vsInstallerUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+          $vsInstallerPath = "$env:TEMP\vs_buildtools.exe"
+          Write-Host "Downloading Visual Studio Build Tools..."
+          Invoke-WebRequest -Uri $vsInstallerUrl -OutFile $vsInstallerPath
+          Write-Host "Installing Visual Studio Build Tools..."
+          Start-Process -FilePath $vsInstallerPath -ArgumentList "--quiet", "--wait", "--norestart", "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "--add", "Microsoft.VisualStudio.Component.VC.CMake.Project", "--add", "Microsoft.VisualStudio.Component.VC.ATL", "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621" -Wait
+          Remove-Item $vsInstallerPath -Force
+
+      - name: Install build dependencies
+        shell: powershell
+        run: |
+          $ninjaUrl = "https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-win.zip"
+          $ninjaPath = "$env:TEMP\ninja-win.zip"
+          $ninjaDir = "C:\ninja"
+          New-Item -ItemType Directory -Force -Path $ninjaDir
+          Invoke-WebRequest -Uri $ninjaUrl -OutFile $ninjaPath
+          Expand-Archive -Path $ninjaPath -DestinationPath $ninjaDir -Force
+          
+          $perlUrl = "http://strawberryperl.com/download/5.32.1.1/strawberry-perl-5.32.1.1-64bit.msi"
+          $perlPath = "$env:TEMP\strawberry-perl-5.32.1.1-64bit.msi"
+          Invoke-WebRequest -Uri $perlUrl -OutFile $perlPath
+          Start-Process msiexec.exe -ArgumentList "/i $perlPath /quiet /norestart" -Wait
+          
+          $env:PATH = "C:\ninja;C:\Strawberry\perl\bin;$env:PATH"
+          ninja --version
+          perl --version
+
+      - name: Download ROCm nightly tarball
+        shell: powershell
+        run: |
+          $rocmVersion = "${{ env.ROCM_VERSION }}"
+          $currentTarget = "${{ matrix.gfx_target }}"
+          
+          $s3Target = $currentTarget
+          if ($currentTarget -eq "gfx103X" -or $currentTarget -eq "gfx110X" -or $currentTarget -eq "gfx120X") {
+            $s3Target = "$currentTarget-all"
+            Write-Host "Using target with -all suffix: $s3Target"
+          }
+          
+          $baseUrl = "https://rocm.nightlies.amd.com/tarball-multi-arch"
+          if ($rocmVersion -eq "latest") {
+            Write-Host "Auto-detecting latest ROCm version for target: $currentTarget"
+            $indexHtml = (Invoke-WebRequest "$baseUrl/" -UseBasicParsing).Content
+            $filesMatch = [regex]::Match($indexHtml, 'const files = (\[.*?\]);', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+            if (-not $filesMatch.Success) {
+              Write-Error "Failed to parse file index from $baseUrl/"
+              exit 1
+            }
+            $allFiles = $filesMatch.Groups[1].Value | ConvertFrom-Json
+            $prefix = "therock-dist-windows-$s3Target-"
+            $versionPattern = "^$([regex]::Escape($prefix))\d+\.\d+\.\d+(a|rc)\d+\.tar\.gz$"
+            $latest = $allFiles |
+              Where-Object { $_.name -match $versionPattern } |
+              Sort-Object { [regex]::Match($_.name, '(\d{8})\.tar\.gz$').Groups[1].Value } |
+              Select-Object -Last 1
+            if (-not $latest) {
+              Write-Error "No tarball found for prefix '$prefix' at $baseUrl/"
+              exit 1
+            }
+            $latestFile = $latest.name
+            Write-Host "Found latest file: $latestFile"
+
+            if ($latestFile -match "therock-dist-windows-$s3Target-(\d+\.\d+\.\d+(?:a|rc)\d+)\.tar\.gz") {
+              $rocmVersion = $matches[1]
+              Write-Host "Detected latest ROCm version: $rocmVersion"
+            } else {
+              Write-Error "Failed to extract ROCm version from latest file: $latestFile"
+              exit 1
+            }
+            $rocmUrl = "$baseUrl/$latestFile"
+          } else {
+            $rocmUrl = "$baseUrl/therock-dist-windows-$s3Target-$rocmVersion.tar.gz"
+          }
+          
+          echo "DETECTED_ROCM_VERSION=$rocmVersion" >> $env:GITHUB_ENV
+          Write-Host "Downloading ROCm from: $rocmUrl"
+          Invoke-WebRequest -Uri $rocmUrl -OutFile "rocm.tar.gz"
+
+      - name: Extract ROCm to C:\opt\rocm
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\opt\rocm"
+          tar -xzf rocm.tar.gz -C C:\opt\rocm --strip-components=1
+
+      - name: Clone CachyLLama
+        shell: powershell
+        run: |
+          $cachyllamaVersion = "${{ env.CACHYLLAMA_VERSION }}"
+          Write-Host "Cloning CachyLLama ($cachyllamaVersion)..."
+          git clone --depth 1 --single-branch --branch $cachyllamaVersion "${{ env.CACHYLLAMA_REPO }}" CachyLLama
+          cd CachyLLama
+          $commitHash = git rev-parse --short=7 HEAD
+          echo "CACHYLLAMA_COMMIT_HASH=$commitHash" >> $env:GITHUB_ENV
+          Write-Host "CachyLLama commit: $commitHash"
+          git log -1 --oneline
+
+      - name: Build CachyLLama + ROCm
+        shell: cmd
+        run: |
+          set "current_target=${{ matrix.gfx_target }}"
+          echo Input target: %current_target%
+          
+          if "%current_target%"=="gfx110X" (
+            set "mapped_target=gfx1100;gfx1101;gfx1102;gfx1103"
+          ) else if "%current_target%"=="gfx103X" (
+            set "mapped_target=gfx1030;gfx1031;gfx1032;gfx1034"
+          ) else if "%current_target%"=="gfx1151" (
+            set "mapped_target=gfx1151"
+          ) else if "%current_target%"=="gfx1150" (
+            set "mapped_target=gfx1150"
+          ) else if "%current_target%"=="gfx120X" (
+            set "mapped_target=gfx1200;gfx1201"
+          ) else (
+            set "mapped_target=%current_target%"
+          )
+          echo Mapped target: %mapped_target%
+
+          set HIP_PATH=C:\opt\rocm
+          set HIP_PLATFORM=amd
+          set PATH=%HIP_PATH%\lib\llvm\bin;%HIP_PATH%\bin;C:\ninja;%PATH%
+
+          call "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > vs_path.txt
+          set /p VS_PATH=<vs_path.txt
+          call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+
+          cd CachyLLama
+          mkdir build
+          cd build
+
+          cmake .. -G Ninja ^
+            -DCMAKE_C_COMPILER="C:\opt\rocm\lib\llvm\bin\clang.exe" ^
+            -DCMAKE_CXX_COMPILER="C:\opt\rocm\lib\llvm\bin\clang++.exe" ^
+            -DCMAKE_CXX_FLAGS="-IC:\opt\rocm\include" ^
+            -DCMAKE_CROSSCOMPILING=ON ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DGPU_TARGETS="%mapped_target%" ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DLLAMA_BUILD_TESTS=OFF ^
+            -DLLAMA_BUILD_TOOLS=ON ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DGGML_HIP=ON ^
+            -DGGML_OPENMP=OFF ^
+            -DGGML_RPC=ON ^
+            -DGGML_HIP_ROCWMMA_FATTN=OFF ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_STATIC=OFF ^
+            -DCMAKE_SYSTEM_NAME=Windows
+
+          cmake --build . -j %NUMBER_OF_PROCESSORS%
+
+      - name: Bundle ROCm Core Libraries (Windows)
+        shell: powershell
+        run: |
+          $buildBinPath = "CachyLLama\build\bin"
+          $rocmBinPath = "C:\opt\rocm\bin"
+          Write-Host "Bundling ROCm runtime files to $buildBinPath..."
+          
+          python scripts/gather_required_rocm_libs.py --rocm-dir "C:\opt\rocm" --dest-dir $buildBinPath --platform windows
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cachy-llama-windows-rocm-${{ matrix.gfx_target }}-x64
+          path: CachyLLama/build/bin/
+          retention-days: 30
+
+      - name: Set job outputs
+        id: set-outputs
+        shell: powershell
+        run: |
+          $rocmVersion = if ($env:DETECTED_ROCM_VERSION) { $env:DETECTED_ROCM_VERSION } else { $env:ROCM_VERSION }
+          echo "rocm_version=$rocmVersion" >> $env:GITHUB_OUTPUT
+          echo "cachyllama_commit_hash=$env:CACHYLLAMA_COMMIT_HASH" >> $env:GITHUB_OUTPUT
+
+  build-ubuntu:
+    runs-on: ubuntu-22.04
+    needs: prepare-matrix
+    if: needs.prepare-matrix.outputs.should_build_ubuntu == 'true'
+    strategy:
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.ubuntu_matrix) }}
+      fail-fast: false
+    outputs:
+      rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
+      cachyllama_commit_hash: ${{ steps.set-outputs.outputs.cachyllama_commit_hash }}
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' 'ruby.*' \
+            google-cloud-cli azure-cli google-chrome-stable firefox powershell 2>/dev/null || true
+          sudo apt-get autoremove -y
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools & patchelf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build unzip curl patchelf build-essential
+
+      - name: Download and extract ROCm from AMD TheRock
+        run: |
+          rocm_version="${{ env.ROCM_VERSION }}"
+          current_target="${{ matrix.gfx_target }}"
+          
+          s3_target="$current_target"
+          if [[ "$current_target" = "gfx103X" || "$current_target" = "gfx110X" || "$current_target" = "gfx120X" ]]; then
+            s3_target="${current_target}-all"
+            echo "Using target with -all suffix: $s3_target"
+          fi
+          
+          base_url="https://rocm.nightlies.amd.com/tarball-multi-arch"
+          if [ "$rocm_version" = "latest" ]; then
+            echo "Auto-detecting latest ROCm version for target: $current_target"
+            prefix="therock-dist-linux-${s3_target}-"
+
+            files_json=$(curl -s "$base_url/" | tr '\n' ' ' | grep -oP 'const files = \K\[.*?\](?=\s*;)')
+            if [ -z "$files_json" ]; then
+              echo "Failed to parse file index from $base_url/"
+              exit 1
+            fi
+
+            latest_file=$(echo "$files_json" | jq -r --arg p "$prefix" \
+              '[.[] | select(.name | test("^" + $p + "[0-9]+\\.[0-9]+\\.[0-9]+(a|rc)[0-9]+\\.tar\\.gz$"))] | sort_by(.name | capture("(?<d>[0-9]{8})\\.tar\\.gz$").d) | last | .name // empty')
+            if [ -z "$latest_file" ]; then
+              echo "No tarball found for prefix '$prefix' at $base_url/"
+              exit 1
+            fi
+            echo "Found latest file: $latest_file"
+
+            if [[ "$latest_file" =~ therock-dist-linux-${s3_target}-([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
+              rocm_version="${BASH_REMATCH[1]}"
+              echo "Detected latest ROCm version: $rocm_version"
+            else
+              echo "Failed to extract ROCm version from $latest_file"
+              exit 1
+            fi
+            rocm_url="$base_url/$latest_file"
+          else
+            rocm_url="$base_url/therock-dist-linux-${s3_target}-${rocm_version}.tar.gz"
+          fi
+          
+          echo "DETECTED_ROCM_VERSION=$rocm_version" >> $GITHUB_ENV
+          echo "Streaming ROCm from $rocm_url -> /opt/rocm"
+          sudo mkdir -p /opt/rocm
+          curl -sL "$rocm_url" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+
+      - name: Set ROCm environment variables
+        run: |
+          echo "HIP_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "ROCM_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "HIP_PLATFORM=amd" >> $GITHUB_ENV
+          echo "HIP_CLANG_PATH=/opt/rocm/llvm/bin" >> $GITHUB_ENV
+          echo "/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:/opt/rocm/llvm/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+
+      - name: Clone CachyLLama
+        run: |
+          cachyllama_version="${{ env.CACHYLLAMA_VERSION }}"
+          echo "Cloning CachyLLama ($cachyllama_version)..."
+          git clone --depth 1 --single-branch --branch "$cachyllama_version" "${{ env.CACHYLLAMA_REPO }}" CachyLLama
+          cd CachyLLama
+          commit_hash=$(git rev-parse --short=7 HEAD)
+          echo "CACHYLLAMA_COMMIT_HASH=$commit_hash" >> $GITHUB_ENV
+          echo "CachyLLama commit: $commit_hash"
+          git log -1 --oneline
+
+      - name: Build CachyLLama + ROCm (Linux)
+        run: |
+          current_target="${{ matrix.gfx_target }}"
+          echo "Input target: $current_target"
+          
+          if [ "$current_target" = "gfx110X" ]; then
+            mapped_target="gfx1100;gfx1101;gfx1102;gfx1103"
+          elif [ "$current_target" = "gfx103X" ]; then
+            mapped_target="gfx1030;gfx1031;gfx1032;gfx1034"
+          elif [ "$current_target" = "gfx1151" ]; then
+            mapped_target="gfx1151"
+          elif [ "$current_target" = "gfx1150" ]; then
+            mapped_target="gfx1150"
+          elif [ "$current_target" = "gfx120X" ]; then
+            mapped_target="gfx1200;gfx1201"
+          else
+            mapped_target="$current_target"
+          fi
+          echo "Mapped target: $mapped_target"
+
+          cd CachyLLama
+          mkdir build
+          cd build
+
+          cmake .. -G Ninja \
+            -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
+            -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
+            -DCMAKE_CXX_FLAGS="-I/opt/rocm/include" \
+            -DCMAKE_CROSSCOMPILING=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGPU_TARGETS="$mapped_target" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DGGML_HIP=ON \
+            -DGGML_OPENMP=OFF \
+            -DGGML_RPC=ON \
+            -DGGML_HIP_ROCWMMA_FATTN=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_STATIC=OFF \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+
+          cmake --build . -j $(nproc)
+
+      - name: Bundle ROCm Core Libraries (Linux)
+        run: |
+          build_bin_path="CachyLLama/build/bin"
+          python3 scripts/gather_required_rocm_libs.py --rocm-dir /opt/rocm --dest-dir "$build_bin_path" --platform linux
+
+      - name: Set RPATH for portable distribution
+        run: |
+          cd CachyLLama/build/bin
+          for file in *.so* llama-* cachy-*; do
+            if [ -f "$file" ] && [ ! -L "$file" ]; then
+              patchelf --set-rpath '$ORIGIN' "$file" 2>/dev/null || true
+            fi
+          done
+          ls -la
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cachy-llama-ubuntu-rocm-${{ matrix.gfx_target }}-x64
+          path: CachyLLama/build/bin/
+          retention-days: 30
+
+      - name: Set job outputs
+        id: set-outputs
+        run: |
+          rocm_version="${DETECTED_ROCM_VERSION:-${{ env.ROCM_VERSION }}}"
+          echo "rocm_version=$rocm_version" >> $GITHUB_OUTPUT
+          echo "cachyllama_commit_hash=${CACHYLLAMA_COMMIT_HASH}" >> $GITHUB_OUTPUT
+
+  create-release:
+    needs: [prepare-matrix, build-windows, build-ubuntu]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    if: |
+      always() &&
+      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped') &&
+      (needs.build-ubuntu.result == 'success' || needs.build-ubuntu.result == 'skipped') &&
+      (needs.build-windows.result == 'success' || needs.build-ubuntu.result == 'success') &&
+      github.event_name != 'pull_request' &&
+      (github.event_name == 'schedule' || github.event.inputs.create_release == 'true' || github.event.inputs.create_release == null)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./all-artifacts
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prefix: 'b'
+
+      - name: Package release zip archives
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          targets="${{ env.GFX_TARGETS }}"
+          operating_systems="${{ env.OPERATING_SYSTEMS }}"
+          
+          echo "Packaging archives for release: $TAG"
+          mkdir -p ./release-packages
+          
+          IFS=',' read -ra TARGET_ARRAY <<< "$targets"
+          IFS=',' read -ra OS_ARRAY <<< "$operating_systems"
+          
+          for os in "${OS_ARRAY[@]}"; do
+            os=$(echo "$os" | xargs)
+            for target in "${TARGET_ARRAY[@]}"; do
+              target=$(echo "$target" | xargs)
+              artifact_name="cachy-llama-${os}-rocm-${target}-x64"
+              artifact_dir="./all-artifacts/${artifact_name}"
+              final_archive="cachy-llama-${TAG}-${os}-rocm-${target}-x64.zip"
+              
+              if [ -d "$artifact_dir" ]; then
+                echo "Creating $final_archive..."
+                (cd "$artifact_dir" && zip -r "../../release-packages/${final_archive}" *)
+              else
+                echo "Skipping non-existent artifact: $artifact_dir"
+              fi
+            done
+          done
+          
+          ls -la ./release-packages/
+
+      - name: Generate release notes
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          ROCM_VERSION="${{ needs.build-windows.outputs.rocm_version || needs.build-ubuntu.outputs.rocm_version }}"
+          CACHYLLAMA_COMMIT="${{ needs.build-windows.outputs.cachyllama_commit_hash || needs.build-ubuntu.outputs.cachyllama_commit_hash }}"
+          
+          python3 scripts/generate_release_notes.py \
+            --tag "$TAG" \
+            --cachyllama-commit "$CACHYLLAMA_COMMIT" \
+            --rocm-version "$ROCM_VERSION" \
+            --targets "${{ env.GFX_TARGETS }}" \
+            --os-list "${{ env.OPERATING_SYSTEMS }}" \
+            --artifacts-dir "./release-packages" \
+            --output "RELEASE_NOTES.md"
+          
+          cat RELEASE_NOTES.md
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          gh release create "$TAG" \
+            --title "CachyLLama $TAG (ROCm Nightly)" \
+            --notes-file "RELEASE_NOTES.md" \
+            ./release-packages/*.zip

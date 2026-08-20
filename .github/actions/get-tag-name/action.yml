@@ -1,0 +1,68 @@
+name: 'Get Next Tag Name'
+description: 'Determine next sequential release tag (bXXXX) for CachyLLama builds'
+
+inputs:
+  github_token:
+    description: 'GitHub token for querying releases API'
+    required: false
+    default: ${{ github.token }}
+  prefix:
+    description: 'Tag prefix'
+    required: false
+    default: 'b'
+
+outputs:
+  tag:
+    description: 'Generated release tag name (e.g. b1001)'
+    value: ${{ steps.generate-tag.outputs.tag }}
+  tag_exists:
+    description: 'Whether the generated tag already exists in remote'
+    value: ${{ steps.check-tag.outputs.tag_exists }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Generate sequential release tag
+      id: generate-tag
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        PREFIX: ${{ inputs.prefix }}
+      run: |
+        echo "Determining next release tag with prefix '$PREFIX'..."
+        
+        # Get all existing release tags that match the pattern <prefix>####
+        existing_tags=$(gh release list --limit 1000 --json tagName --jq '.[].tagName' 2>/dev/null | grep -E "^${PREFIX}[0-9]{4,}$" | sort -V || echo "")
+        
+        if [ -z "$existing_tags" ]; then
+          # Fall back to git tags if gh release list is empty
+          existing_tags=$(git tag -l "${PREFIX}*" | grep -E "^${PREFIX}[0-9]{4,}$" | sort -V || echo "")
+        fi
+
+        if [ -z "$existing_tags" ]; then
+          next_number=1000
+          echo "No existing sequential release tags found, starting with ${PREFIX}1000"
+        else
+          highest_tag=$(echo "$existing_tags" | tail -n 1)
+          highest_number=$(echo "$highest_tag" | sed "s/^${PREFIX}//")
+          next_number=$((highest_number + 1))
+          echo "Highest existing tag: $highest_tag (number: $highest_number)"
+          echo "Next number will be: $next_number"
+        fi
+
+        TAG=$(printf "${PREFIX}%04d" "$next_number")
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        echo "Generated release tag: ${TAG}"
+
+    - name: Check if tag exists
+      id: check-tag
+      shell: bash
+      run: |
+        TAG="${{ steps.generate-tag.outputs.tag }}"
+        if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+          echo "Tag $TAG already exists on remote"
+          echo "tag_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "Tag $TAG does not exist on remote"
+          echo "tag_exists=false" >> $GITHUB_OUTPUT
+        fi

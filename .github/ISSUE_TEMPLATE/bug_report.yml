@@ -1,0 +1,55 @@
+name: Bug Report
+description: File a bug report for CachyLLama-BUILDER automated builds or packages
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: dropdown
+    id: artifact-type
+    attributes:
+      label: Build Artifact Type
+      description: Which build artifact are you having issues with?
+      options:
+        - Linux ROCm (gfx1151 - Strix Halo)
+        - Linux ROCm (gfx1150 - Strix Point)
+        - Linux ROCm (gfx110X - Phoenix / 780M / 7900XTX)
+        - Linux ROCm (gfx103X - Steam Deck / 680M)
+        - Linux Vulkan
+        - Windows ROCm
+        - Windows CPU / CUDA
+        - macOS Metal
+        - llama-ai Turnkey Bundle
+    validations:
+      required: true
+  - type: input
+    id: release-tag
+    attributes:
+      label: Release Tag / Build Number
+      description: E.g., b1001, latest nightly, or specific commit hash.
+      placeholder: b1001
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware & OS Details
+      description: CPU, GPU, OS distribution, kernel version, ROCm/driver version.
+      placeholder: AMD Ryzen AI Max+ 395, Radeon 8060S, Bazzite 41 (Kernel 6.13)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output
+      description: Please copy and paste any relevant terminal or GitHub Actions logs.
+      render: shell

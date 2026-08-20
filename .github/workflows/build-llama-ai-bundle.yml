@@ -1,0 +1,175 @@
+name: Build llama-ai Turnkey Bundle
+
+on:
+  schedule:
+    - cron: '0 4 * * *' # Nightly at 4:00 AM UTC
+  workflow_dispatch:
+    inputs:
+      llama_ai_version:
+        description: 'llama-ai branch or tag'
+        required: false
+        default: 'main'
+      cachyllama_version:
+        description: 'CachyLLama branch or tag'
+        required: false
+        default: 'master'
+      create_release:
+        description: 'Create a GitHub release'
+        required: false
+        default: true
+        type: boolean
+  pull_request:
+    paths:
+      - '.github/workflows/build-llama-ai-bundle.yml'
+
+jobs:
+  build-bundle-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libvulkan-dev vulkan-tools glslang-tools build-essential
+
+      - name: Clone llama-ai repository
+        run: |
+          git clone --depth 1 --branch "${{ github.event.inputs.llama_ai_version || 'main' }}" https://github.com/fewtarius/llama-ai.git llama-ai-dist
+          cd llama-ai-dist
+          git submodule update --init --recursive || true
+
+      - name: Clone and Build CachyLLama (Vulkan Backend)
+        run: |
+          git clone --depth 1 --branch "${{ github.event.inputs.cachyllama_version || 'master' }}" https://github.com/fewtarius/CachyLLama.git CachyLLama
+          cd CachyLLama
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_VULKAN=ON \
+            -DGGML_CPU=ON \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_SERVER=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Assemble Linux Bundle
+        run: |
+          mkdir -p llama-ai-dist/src/cachy-llama-vulkan/build/bin
+          cp -r CachyLLama/build/bin/* llama-ai-dist/src/cachy-llama-vulkan/build/bin/
+          
+          # Create root bin/ symlinks or copies if needed
+          mkdir -p llama-ai-dist/bin
+          cp -r CachyLLama/build/bin/* llama-ai-dist/bin/
+          
+          chmod +x llama-ai-dist/llama-run.sh
+          chmod +x llama-ai-dist/scripts/*.sh || true
+
+          tar -czvf llama-ai-linux-x64-bundle.tar.gz -C llama-ai-dist .
+
+      - name: Upload Linux Bundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-ai-linux-x64-bundle.tar.gz
+          path: llama-ai-linux-x64-bundle.tar.gz
+
+  build-bundle-macos:
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clone llama-ai repository
+        run: |
+          git clone --depth 1 --branch "${{ github.event.inputs.llama_ai_version || 'main' }}" https://github.com/fewtarius/llama-ai.git llama-ai-dist
+
+      - name: Clone and Build CachyLLama (Metal Backend)
+        run: |
+          git clone --depth 1 --branch "${{ github.event.inputs.cachyllama_version || 'master' }}" https://github.com/fewtarius/CachyLLama.git CachyLLama
+          cd CachyLLama
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_SERVER=ON
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Assemble macOS Bundle
+        run: |
+          mkdir -p llama-ai-dist/src/cachy-llama-metal/build/bin
+          cp -r CachyLLama/build/bin/* llama-ai-dist/src/cachy-llama-metal/build/bin/
+          mkdir -p llama-ai-dist/bin
+          cp -r CachyLLama/build/bin/* llama-ai-dist/bin/
+
+          chmod +x llama-ai-dist/llama-run.sh
+          chmod +x llama-ai-dist/scripts/*.sh || true
+
+          tar -czvf llama-ai-macos-arm64-bundle.tar.gz -C llama-ai-dist .
+
+      - name: Upload macOS Bundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-ai-macos-arm64-bundle.tar.gz
+          path: llama-ai-macos-arm64-bundle.tar.gz
+
+  release:
+    needs: [build-bundle-linux, build-bundle-macos]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      (github.event_name == 'schedule' || github.event.inputs.create_release == 'true' || github.event.inputs.create_release == null)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./bundle-artifacts
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prefix: 'b'
+
+      - name: Package bundles for release
+        run: |
+          mkdir -p ./release-bundles
+          TAG="${{ steps.tag.outputs.tag }}"
+          
+          if [ -f "./bundle-artifacts/llama-ai-linux-x64-bundle.tar.gz/llama-ai-linux-x64-bundle.tar.gz" ]; then
+            cp ./bundle-artifacts/llama-ai-linux-x64-bundle.tar.gz/llama-ai-linux-x64-bundle.tar.gz "./release-bundles/llama-ai-${TAG}-linux-x64.tar.gz"
+          fi
+          
+          if [ -f "./bundle-artifacts/llama-ai-macos-arm64-bundle.tar.gz/llama-ai-macos-arm64-bundle.tar.gz" ]; then
+            cp ./bundle-artifacts/llama-ai-macos-arm64-bundle.tar.gz/llama-ai-macos-arm64-bundle.tar.gz "./release-bundles/llama-ai-${TAG}-macos-arm64.tar.gz"
+          fi
+          
+          ls -la ./release-bundles/
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          gh release create "llama-ai-$TAG" \
+            --title "llama-ai $TAG Turnkey Bundle" \
+            --notes "Turnkey distribution bundle for llama-ai with pre-compiled CachyLLama binaries, solver, and runner scripts." \
+            ./release-bundles/*

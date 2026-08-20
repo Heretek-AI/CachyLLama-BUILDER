@@ -1,0 +1,143 @@
+name: 'Test CachyLLama Build'
+description: 'Download and test CachyLLama build artifacts on host GPU'
+
+inputs:
+  os_type:
+    description: 'Operating system type (Windows or Linux)'
+    required: true
+  gfx_target:
+    description: 'GPU target (e.g., gfx1151, gfx1150, gfx110X, etc.)'
+    required: true
+  artifact_name:
+    description: 'Full artifact name to download'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: llama-binaries
+
+    - name: Download test model (Windows)
+      if: inputs.os_type == 'Windows'
+      shell: powershell
+      run: |
+        $modelUrl = "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_0.gguf?download=true"
+        $modelPath = "Qwen3-0.6B-Q4_0.gguf"
+        
+        Write-Host "Downloading test model from: $modelUrl"
+        curl.exe -L -o $modelPath $modelUrl
+        
+        if (Test-Path $modelPath) {
+          $fileSize = (Get-Item $modelPath).Length
+          Write-Host "Model downloaded successfully. Size: $fileSize bytes"
+        } else {
+          Write-Error "Failed to download model"
+          exit 1
+        }
+
+    - name: Download test model (Linux)
+      if: inputs.os_type == 'Linux'
+      shell: bash
+      run: |
+        model_url="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_0.gguf?download=true"
+        model_path="Qwen3-0.6B-Q4_0.gguf"
+        
+        echo "Downloading test model from: $model_url"
+        curl -L -o "$model_path" "$model_url"
+        
+        if [ -f "$model_path" ]; then
+          file_size=$(stat -c%s "$model_path")
+          echo "Model downloaded successfully. Size: $file_size bytes"
+        else
+          echo "Failed to download model"
+          exit 1
+        fi
+
+    - name: Set up library path (Linux)
+      if: inputs.os_type == 'Linux'
+      shell: bash
+      run: |
+        echo "LD_LIBRARY_PATH=$(pwd)/llama-binaries:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+
+    - name: Run llama-cli test (Windows)
+      if: inputs.os_type == 'Windows'
+      shell: powershell
+      run: |
+        $llamaCliPath = "llama-binaries\llama-cli.exe"
+        $modelPath = "Qwen3-0.6B-Q4_0.gguf"
+        
+        if (-not (Test-Path $llamaCliPath)) {
+          Write-Error "llama-cli.exe not found at: $llamaCliPath"
+          Get-ChildItem -Recurse "llama-binaries"
+          exit 1
+        }
+        
+        Write-Host "Running CachyLLama CLI test for ${{ inputs.gfx_target }}..."
+        Write-Host "Command: $llamaCliPath -m `"$modelPath`" -ngl 99 -p `"Hello from CachyLLama!`" -st -v"
+        
+        try {
+          $process = Start-Process -FilePath $llamaCliPath -ArgumentList @("-m", "`"$modelPath`"", "-ngl", "99", "-p", "`"Hello from CachyLLama!`"", "-st", "-v") -NoNewWindow -Wait -PassThru -RedirectStandardOutput "stdout.txt" -RedirectStandardError "stderr.txt"
+          $process.WaitForExit()
+          
+          $stdout = Get-Content "stdout.txt" -Raw -ErrorAction SilentlyContinue
+          $stderr = Get-Content "stderr.txt" -Raw -ErrorAction SilentlyContinue
+          
+          Write-Host "=== CACHYLLAMA-CLI STDOUT ==="
+          if ($stdout) { Write-Host $stdout } else { Write-Host "(empty)" }
+          Write-Host "=== CACHYLLAMA-CLI STDERR ==="
+          if ($stderr) { Write-Host $stderr } else { Write-Host "(empty)" }
+          Write-Host "Process exit code: $($process.ExitCode)"
+          
+          Remove-Item "stdout.txt" -ErrorAction SilentlyContinue
+          Remove-Item "stderr.txt" -ErrorAction SilentlyContinue
+        }
+        catch {
+          Write-Error "Failed to start llama-cli process: $_"
+          exit 1
+        }
+        
+        if ($process.ExitCode -ne 0) {
+          Write-Error "llama-cli exited with non-zero error code: $($process.ExitCode)"
+          exit 1
+        }
+        Write-Host "✅ Test PASSED on Windows (${{ inputs.gfx_target }})"
+
+    - name: Run llama-cli test (Linux)
+      if: inputs.os_type == 'Linux'
+      shell: bash
+      run: |
+        llama_cli_path="./llama-binaries/llama-cli"
+        model_path="Qwen3-0.6B-Q4_0.gguf"
+        output_file="llama_output.txt"
+        
+        chmod +x "$llama_cli_path"
+        
+        if [ ! -f "$llama_cli_path" ]; then
+          echo "llama-cli not found at: $llama_cli_path"
+          find llama-binaries -type f
+          exit 1
+        fi
+        
+        echo "Running CachyLLama CLI test for ${{ inputs.gfx_target }}..."
+        set +e
+        "$llama_cli_path" -m "$model_path" -ngl 99 -p "Hello from CachyLLama!" -st -v > "$output_file" 2>&1
+        exit_code=$?
+        set -e
+        
+        echo "=== CACHYLLAMA-CLI OUTPUT ==="
+        if [ -f "$output_file" ] && [ -s "$output_file" ]; then
+          cat "$output_file"
+        else
+          echo "(empty)"
+        fi
+        echo "Process exit code: $exit_code"
+        
+        if [ $exit_code -ne 0 ]; then
+          echo "❌ llama-cli exited with error code: $exit_code"
+          exit 1
+        fi
+        echo "✅ Test PASSED on Linux (${{ inputs.gfx_target }})"
