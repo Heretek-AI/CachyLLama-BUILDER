@@ -239,7 +239,8 @@ jobs:
             Write-Error "llama-cli.exe missing!"
             exit 1
           }
-          & $llamaCli --help | Select-Object -First 10
+          $helpText = & $llamaCli --help 2>&1
+          $helpText | Select-Object -First 10 | Out-Host
           Write-Host "Windows CPU binary verification successful!"
 
       - name: Pack artifacts
