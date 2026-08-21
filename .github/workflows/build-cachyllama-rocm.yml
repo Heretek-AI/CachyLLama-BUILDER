@@ -552,3 +552,16 @@ jobs:
             --title "CachyLLama $TAG (ROCm Nightly)" \
             --notes-file "RELEASE_NOTES.md" \
             ./release-packages/*.zip
+
+      - name: Trigger Homebrew Tap Formula Update
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          echo "Notifying Homebrew Tap of new release: $TAG"
+          gh api -X POST "/repos/Heretek-AI/homebrew-tap/dispatches" \
+            -f event_type="builder-release" \
+            -f client_payload[builder]="cachyllama" \
+            -f client_payload[release_tag]="$TAG" || echo "Note: Tap dispatch triggered or skipped if repo permissions are local"
+

@@ -72,6 +72,27 @@ All ROCm and Vulkan packages are pre-compiled and bundled with required dynamic 
 
 ## 📦 Quick Start Guides
 
+### 🍺 Homebrew Installation (Linux & macOS)
+
+Install turnkey, pre-compiled CachyLLama builds directly with the Homebrew package manager:
+
+```bash
+# 1. Tap the Heretek-AI repository
+brew tap Heretek-AI/tap
+
+# 2. Install Universal Vulkan build (works across Linux APUs/GPUs) or macOS Metal:
+brew install cachy-llama
+
+# 3. Or install dedicated ROCm 7 GPU acceleration for your AMD target:
+brew install cachy-llama --with-rocm-gfx1151  # AMD Strix Halo (Radeon 8060S / 128GB)
+brew install cachy-llama --with-rocm-gfx1150  # AMD Strix Point (Radeon 890M / 880M)
+brew install cachy-llama --with-rocm-gfx120X  # AMD RDNA4 (RX 9070 XT / 9070)
+brew install cachy-llama --with-rocm-gfx110X  # AMD RDNA3 (RX 7900 / 7800, Radeon 780M)
+
+# 4. Optional: Run background OpenAI-compatible server daemon:
+brew services start cachy-llama
+```
+
 ### 1. Ready-to-Run `llama-ai` Turnkey Bundle (Recommended for APUs)
 
 The `llama-ai` bundle includes the full autonomous runner, the optimistic-first profile solver, systemd service units, and pre-compiled CachyLLama binaries.
