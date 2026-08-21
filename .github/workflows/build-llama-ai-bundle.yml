@@ -180,7 +180,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
-          gh release create "llama-ai-$TAG" \
-            --title "llama-ai $TAG Turnkey Bundle" \
-            --notes "Turnkey distribution bundle for llama-ai with pre-compiled CachyLLama binaries, solver, and runner scripts." \
-            ./release-bundles/*
+          if gh release view "llama-ai-$TAG" >/dev/null 2>&1; then
+            echo "Release llama-ai-$TAG already exists. Uploading/updating release assets with --clobber..."
+            gh release upload "llama-ai-$TAG" ./release-bundles/* --clobber
+          else
+            echo "Creating new release llama-ai-$TAG..."
+            gh release create "llama-ai-$TAG" \
+              --title "llama-ai $TAG Turnkey Bundle" \
+              --notes "Turnkey distribution bundle for llama-ai with pre-compiled CachyLLama binaries, solver, and runner scripts." \
+              ./release-bundles/*
+          fi

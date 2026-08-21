@@ -320,14 +320,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
-          gh release create "$TAG" \
-            --title "CachyLLama $TAG (Multi-Backend)" \
-            --notes "### CachyLLama Multi-Backend Release $TAG
-            - **Vulkan RADV**: Linux AMD APU / dGPU acceleration
-            - **CPU**: Linux & Windows x64 / ARM64
-            - **CUDA**: NVIDIA GPU support (sm_75 to sm_121)
-            - **Metal**: Apple Silicon macOS acceleration" \
-            ./release-files/*
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Uploading/updating release assets with --clobber..."
+            gh release upload "$TAG" ./release-files/* --clobber
+          else
+            echo "Creating new release $TAG..."
+            gh release create "$TAG" \
+              --title "CachyLLama $TAG (Multi-Backend)" \
+              --notes "### CachyLLama Multi-Backend Release $TAG
+              - **Vulkan RADV**: Linux AMD APU / dGPU acceleration
+              - **CPU**: Linux & Windows x64 / ARM64
+              - **CUDA**: NVIDIA GPU support (sm_75 to sm_121)
+              - **Metal**: Apple Silicon macOS acceleration" \
+              ./release-files/*
+          fi
 
       - name: Trigger Homebrew Tap Formula Update
         if: success()
