@@ -53,7 +53,7 @@ def main():
         [
             (
                 '#include <sys/mman.h>\n#include <unistd.h>',
-                '#ifndef _WIN32\n#include <sys/mman.h>\n#include <unistd.h>\n#else\n#include <windows.h>\n#include <memoryapi.h>\nstatic inline size_t getpagesize() {\n    SYSTEM_INFO si;\n    GetSystemInfo(&si);\n    return si.dwPageSize ? (size_t)si.dwPageSize : (size_t)4096;\n}\n#endif',
+                '#ifndef _WIN32\n#include <sys/mman.h>\n#include <unistd.h>\n#else\n#include <windows.h>\n#include <memoryapi.h>\n#ifndef MADV_NORMAL\n#define MADV_NORMAL 0\n#endif\n#ifndef MADV_WILLNEED\n#define MADV_WILLNEED 1\n#endif\n#ifndef MADV_DONTNEED\n#define MADV_DONTNEED 2\n#endif\n#ifndef MADV_FREE\n#define MADV_FREE 3\n#endif\nstatic inline size_t getpagesize() {\n    SYSTEM_INFO si;\n    GetSystemInfo(&si);\n    return si.dwPageSize ? (size_t)si.dwPageSize : (size_t)4096;\n}\n#endif',
             ),
             (
                 '(void) madvise(reinterpret_cast<void *>(page_start), aligned_len, advice);',
