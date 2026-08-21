@@ -104,10 +104,13 @@ jobs:
       - name: Build CPU backend
         run: |
           cd CachyLLama
+          EXTRA_FLAGS=""
+          if [ "${{ matrix.build }}" = "x64" ]; then
+            EXTRA_FLAGS="-DGGML_CPU_ALL_VARIANTS=ON -DGGML_BACKEND_DL=ON"
+          fi
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_CPU_ALL_VARIANTS=ON \
-            -DGGML_BACKEND_DL=ON \
+            $EXTRA_FLAGS \
             -DGGML_NATIVE=OFF \
             -DGGML_OPENMP=ON \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
