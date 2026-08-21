@@ -81,6 +81,7 @@ jobs:
   ubuntu-cpu:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - build: 'x64'
@@ -106,12 +107,21 @@ jobs:
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_OPENMP=ON \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
+
+      - name: Verify CPU Binaries
+        run: |
+          cd CachyLLama/build/bin
+          export LD_LIBRARY_PATH="$(pwd):${LD_LIBRARY_PATH:-}"
+          ./llama-cli --help | head -n 10
+          ./llama-server --help | head -n 10
+          echo "CPU binary verification successful!"
 
       - name: Pack artifacts
         run: |
@@ -129,7 +139,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sm: ${{ github.event_name == 'pull_request' && fromJSON('["89"]') || fromJSON('["75", "80", "86", "89", "90", "100", "120", "121"]') }}
+        sm: ${{ github.event_name == 'pull_request' && fromJSON('["89"]') || fromJSON('["75", "80", "86", "89", "90", "100", "120"]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

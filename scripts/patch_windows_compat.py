@@ -11,6 +11,9 @@ madvise(), POSIX mkdir) when building on MSVC or Clang on Windows.
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 
 def patch_file(path: Path, replacements: list[tuple[str, str]]) -> bool:
     if not path.exists():
@@ -28,7 +31,7 @@ def patch_file(path: Path, replacements: list[tuple[str, str]]) -> bool:
 
     if content != original:
         path.write_text(content, encoding="utf-8")
-        print(f"[✓] Patched {path}")
+        print(f"[+] Patched {path}")
         return True
     else:
         print(f"[*] No changes applied to {path}")
@@ -71,7 +74,7 @@ def main():
         ],
     )
 
-    print("[✓] CachyLLama Windows compatibility patch completed successfully.")
+    print("[+] CachyLLama Windows compatibility patch completed successfully.")
 
 
 if __name__ == "__main__":

@@ -582,10 +582,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
-          gh release create "$TAG" \
-            --title "CachyLLama $TAG (ROCm Nightly)" \
-            --notes-file "RELEASE_NOTES.md" \
-            ./release-packages/*.zip
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Uploading/updating release assets with --clobber..."
+            gh release upload "$TAG" ./release-packages/*.zip --clobber
+          else
+            echo "Creating new release $TAG..."
+            gh release create "$TAG" \
+              --title "CachyLLama $TAG (ROCm Nightly)" \
+              --notes-file "RELEASE_NOTES.md" \
+              ./release-packages/*.zip
+          fi
 
       - name: Trigger Homebrew Tap Formula Update
         if: success()
