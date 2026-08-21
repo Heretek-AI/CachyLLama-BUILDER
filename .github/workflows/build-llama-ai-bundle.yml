@@ -32,7 +32,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libvulkan-dev vulkan-tools glslang-tools build-essential
+          sudo apt-get install -y cmake ninja-build libvulkan-dev vulkan-tools glslang-tools glslc build-essential
 
       - name: Clone llama-ai repository
         run: |
@@ -69,6 +69,15 @@ jobs:
           chmod +x llama-ai-dist/llama-run.sh
           chmod +x llama-ai-dist/scripts/*.sh || true
 
+      - name: Test Linux Bundle Executables
+        run: |
+          export LD_LIBRARY_PATH="$(pwd)/llama-ai-dist/bin:${LD_LIBRARY_PATH:-}"
+          ./llama-ai-dist/bin/llama-cli --help | head -n 10
+          ./llama-ai-dist/llama-run.sh --help || true
+          echo "Linux bundle verification successful!"
+
+      - name: Package Linux Bundle
+        run: |
           tar -czvf llama-ai-linux-x64-bundle.tar.gz -C llama-ai-dist .
 
       - name: Upload Linux Bundle Artifact

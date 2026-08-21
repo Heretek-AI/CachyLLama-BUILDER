@@ -213,6 +213,11 @@ jobs:
           Write-Host "CachyLLama commit: $commitHash"
           git log -1 --oneline
 
+      - name: Patch CachyLLama for Windows Compatibility
+        shell: powershell
+        run: |
+          python scripts/patch_windows_compat.py CachyLLama
+
       - name: Build CachyLLama + ROCm
         shell: cmd
         run: |
@@ -258,6 +263,8 @@ jobs:
             -DLLAMA_BUILD_TOOLS=ON ^
             -DLLAMA_BUILD_SERVER=ON ^
             -DGGML_HIP=ON ^
+            -DGGML_HIP_FORCE_MMQ=ON ^
+            -DGGML_CUDA_FORCE_CUBLAS=OFF ^
             -DGGML_OPENMP=OFF ^
             -DGGML_RPC=ON ^
             -DGGML_HIP_ROCWMMA_FATTN=OFF ^
@@ -276,6 +283,26 @@ jobs:
           Write-Host "Bundling ROCm runtime files to $buildBinPath..."
           
           python scripts/gather_required_rocm_libs.py --rocm-dir "C:\opt\rocm" --dest-dir $buildBinPath --platform windows
+
+      - name: Verify Windows Binaries and Dependencies
+        shell: powershell
+        run: |
+          $binDir = "CachyLLama\build\bin"
+          Write-Host "Verifying executable existence and DLL dependencies in $binDir..."
+          Get-ChildItem $binDir | Select-Object Name, Length
+          $llamaCli = Join-Path $binDir "llama-cli.exe"
+          $llamaServer = Join-Path $binDir "llama-server.exe"
+          if (-not (Test-Path $llamaCli)) {
+            Write-Error "llama-cli.exe missing!"
+            exit 1
+          }
+          if (-not (Test-Path $llamaServer)) {
+            Write-Error "llama-server.exe missing!"
+            exit 1
+          }
+          Write-Host "Testing llama-cli.exe --help..."
+          & $llamaCli --help | Select-Object -First 10
+          Write-Host "Windows binary verification successful!"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -448,7 +475,14 @@ jobs:
               patchelf --set-rpath '$ORIGIN' "$file" 2>/dev/null || true
             fi
           done
-          ls -la
+
+      - name: Verify Linux Binaries and Dependencies
+        run: |
+          cd CachyLLama/build/bin
+          export LD_LIBRARY_PATH="$(pwd):${LD_LIBRARY_PATH:-}"
+          ./llama-cli --help | head -n 10
+          ./llama-server --help | head -n 10
+          echo "Linux binary verification successful!"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

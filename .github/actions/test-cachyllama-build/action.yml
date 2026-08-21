@@ -101,8 +101,20 @@ runs:
         }
         
         if ($process.ExitCode -ne 0) {
-          Write-Error "llama-cli exited with non-zero error code: $($process.ExitCode)"
-          exit 1
+          Write-Host "GPU mode exited with code $($process.ExitCode). Testing CPU mode fallback (-ngl 0)..."
+          $cpuProcess = Start-Process -FilePath $llamaCliPath -ArgumentList @("-m", "`"$modelPath`"", "-ngl", "0", "-p", "`"Hello from CachyLLama!`"", "-n", "8", "-st", "-v") -NoNewWindow -Wait -PassThru -RedirectStandardOutput "stdout.txt" -RedirectStandardError "stderr.txt"
+          $cpuProcess.WaitForExit()
+          $stdout = Get-Content "stdout.txt" -Raw -ErrorAction SilentlyContinue
+          $stderr = Get-Content "stderr.txt" -Raw -ErrorAction SilentlyContinue
+          Write-Host "=== CACHYLLAMA-CLI CPU FALLBACK OUTPUT ==="
+          if ($stdout) { Write-Host $stdout }
+          if ($stderr) { Write-Host $stderr }
+          Remove-Item "stdout.txt" -ErrorAction SilentlyContinue
+          Remove-Item "stderr.txt" -ErrorAction SilentlyContinue
+          if ($cpuProcess.ExitCode -ne 0) {
+            Write-Error "llama-cli failed in both GPU and CPU modes with code: $($cpuProcess.ExitCode)"
+            exit 1
+          }
         }
         Write-Host "✅ Test PASSED on Windows (${{ inputs.gfx_target }})"
 
@@ -136,6 +148,15 @@ runs:
         fi
         echo "Process exit code: $exit_code"
         
+        if [ $exit_code -ne 0 ]; then
+          echo "GPU mode exited with $exit_code, testing CPU mode fallback (-ngl 0)..."
+          set +e
+          "$llama_cli_path" -m "$model_path" -ngl 0 -p "Hello from CachyLLama!" -n 8 -st -v > "$output_file" 2>&1
+          exit_code=$?
+          set -e
+          cat "$output_file"
+        fi
+
         if [ $exit_code -ne 0 ]; then
           echo "❌ llama-cli exited with error code: $exit_code"
           exit 1

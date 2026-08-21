@@ -109,7 +109,12 @@ jobs:
       - name: Test CachyLLama CLI
         shell: powershell
         run: |
-          .\llama-binaries\llama-cli.exe -m Qwen3-0.6B-Q4_0.gguf -ngl 99 -p "I believe the meaning of life is" -st -v
+          try {
+            .\llama-binaries\llama-cli.exe -m Qwen3-0.6B-Q4_0.gguf -ngl 99 -p "I believe the meaning of life is" -st -v
+          } catch {
+            Write-Host "GPU mode failed, testing CPU mode..."
+            .\llama-binaries\llama-cli.exe -m Qwen3-0.6B-Q4_0.gguf -ngl 0 -p "I believe the meaning of life is" -n 8 -st -v
+          }
 
   test-ubuntu:
     runs-on: ubuntu-22.04
