@@ -5,7 +5,7 @@
 
 [![Nightly ROCm Build](https://github.com/Heretek-AI/CachyLLama-BUILDER/actions/workflows/build-cachyllama-rocm.yml/badge.svg)](https://github.com/Heretek-AI/CachyLLama-BUILDER/actions/workflows/build-cachyllama-rocm.yml)
 [![Multi-Backend Release](https://github.com/Heretek-AI/CachyLLama-BUILDER/actions/workflows/build-cachyllama-all.yml/badge.svg)](https://github.com/Heretek-AI/CachyLLama-BUILDER/actions/workflows/build-cachyllama-all.yml)
-[![llama-ai Turnkey Bundle](https://github.com/Heretek-AI/CachyLLama-BUILDER/actions/workflows/build-llama-ai-bundle.yml/badge.svg)](https://github.com/Heretek-AI/CachyLLama-BUILDER/actions/workflows/build-llama-ai-bundle.yml)
+[![Homebrew Tap](https://img.shields.io/badge/Homebrew-Heretek--AI%2Ftap-FBB040?logo=homebrew&logoColor=white)](https://github.com/Heretek-AI/homebrew-tap)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Hardware: Strix Halo / Point / Phoenix / Deck](https://img.shields.io/badge/AMD%20APU-Strix%20Halo%20%7C%20Point%20%7C%20Phoenix%20%7C%20Deck-red.svg)](https://github.com/Heretek-AI/CachyLLama-BUILDER)
 [![ROCm: 7.x TheRock Nightly](https://img.shields.io/badge/ROCm-7.x%20TheRock%20Nightly-blue.svg)](https://rocm.nightlies.amd.com/tarball-multi-arch/)
