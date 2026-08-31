@@ -16,10 +16,9 @@ Developer reference for Google Gemini / Antigravity agents working in **CachyLLa
   - `lemonade-sdk/llama.cpp`
 
 ### Core Development Principles
-1. **Never Break CI Portability**: Standalone binaries must function without system-installed ROCm or CUDA drivers by bundling all required DLLs/shared objects and setting `RPATH=$ORIGIN`.
+1. **Never Break CI Portability**: Standalone binaries must function without system-installed ROCm or CUDA drivers by bundling all required shared objects and setting `RPATH=$ORIGIN`.
 2. **AMD APU Priority**: Strix Halo (`gfx1151`), Strix Point (`gfx1150`), and Phoenix (`gfx110X`) are primary targets. Always test that shader compile flags, subgroup configurations, and memory allocators align with CachyLLama defaults.
-3. **Keep Toolchain Pinned on Windows**: Maintain `windows-2022` for ROCm builds due to the MSVC 14.51 `<cmath>` header collision.
-4. **Planning Protocol**: For complex workflow restructuring, always use the `/plan` workflow: create a detailed implementation plan artifact, seek user review, verify with automated checks, and generate a walkthrough.
+3. **Planning Protocol**: For complex workflow restructuring, always use the `/plan` workflow: create a detailed implementation plan artifact, seek user review, verify with automated checks, and generate a walkthrough.
 
 ### Quick Verification Suite
 ```bash

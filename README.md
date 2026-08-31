@@ -58,15 +58,14 @@ All ROCm and Vulkan packages are pre-compiled and bundled with required dynamic 
 
 | Architecture | GFX Target | Target AMD Devices & APUs / GPUs | Release Asset Pattern |
 | :--- | :--- | :--- | :--- |
-| **RDNA3.5 (Strix Halo)** | `gfx1151` | **Ryzen AI Max+ 395 / Radeon 8060S (128 GB)** (Nimo Axis N161, Framework 16) | `cachy-llama-${TAG}-${os}-rocm-gfx1151-x64.zip` |
-| **RDNA3.5 (Strix Point)**| `gfx1150` | **Ryzen AI 9 HX 370 / 365 / Radeon 890M / 880M** (Asus Zenbook S16, G16) | `cachy-llama-${TAG}-${os}-rocm-gfx1150-x64.zip` |
-| **RDNA4** | `gfx120X` | **Next-Gen RDNA4 Discrete GPUs** (`gfx1200`, `gfx1201`) | `cachy-llama-${TAG}-${os}-rocm-gfx120X-x64.zip` |
-| **RDNA3** | `gfx110X` | **Radeon 780M / 760M** (7840U, 7940HS, Ayaneo Flip, GPD Win 4), **RX 7900 XTX / 7900 XT / 7800 XT** | `cachy-llama-${TAG}-${os}-rocm-gfx110X-x64.zip` |
-| **RDNA2** | `gfx103X` | **Steam Deck / Van Gogh 0405, 680M** (6800U), **RX 6800 / 6700 / 6600** | `cachy-llama-${TAG}-${os}-rocm-gfx103X-x64.zip` |
-| **CDNA / CDNA2** | `gfx90a`, `gfx908` | **AMD Instinct MI250X, MI210, MI100** Data Center Accelerators | `cachy-llama-${TAG}-${os}-rocm-gfx90a-x64.zip` |
+| **RDNA3.5 (Strix Halo)** | `gfx1151` | **Ryzen AI Max+ 395 / Radeon 8060S (128 GB)** (Nimo Axis N161, Framework 16) | `cachy-llama-${TAG}-ubuntu-rocm-gfx1151-x64.zip` |
+| **RDNA3.5 (Strix Point)**| `gfx1150` | **Ryzen AI 9 HX 370 / 365 / Radeon 890M / 880M** (Asus Zenbook S16, G16) | `cachy-llama-${TAG}-ubuntu-rocm-gfx1150-x64.zip` |
+| **RDNA4** | `gfx120X` | **Next-Gen RDNA4 Discrete GPUs** (`gfx1200`, `gfx1201`) | `cachy-llama-${TAG}-ubuntu-rocm-gfx120X-x64.zip` |
+| **RDNA3** | `gfx110X` | **Radeon 780M / 760M** (7840U, 7940HS, Ayaneo Flip, GPD Win 4), **RX 7900 XTX / 7900 XT / 7800 XT** | `cachy-llama-${TAG}-ubuntu-rocm-gfx110X-x64.zip` |
+| **RDNA2** | `gfx103X` | **Steam Deck / Van Gogh 0405, 680M** (6800U), **RX 6800 / 6700 / 6600** | `cachy-llama-${TAG}-ubuntu-rocm-gfx103X-x64.zip` |
+| **CDNA / CDNA2** | `gfx90a`, `gfx908` | **AMD Instinct MI250X, MI210, MI100** Data Center Accelerators | `cachy-llama-${TAG}-ubuntu-rocm-gfx90a-x64.zip` |
 | **Universal Vulkan** | `RADV` | **Universal Linux AMD APU Support** (Maximum driver stability without ROCm kernel DKMS) | `cachy-llama-${TAG}-bin-ubuntu-vulkan-x64.tar.gz` |
 | **NVIDIA CUDA** | `sm_75` - `sm_121` | **RTX 20 / 30 / 40 / 50 Series, A100, H100, Blackwell** | `cachy-llama-${TAG}-bin-ubuntu-cuda-${sm}-x64.tar.gz` |
-| **Apple Silicon** | `Metal` | **M1, M2, M3, M4 (Pro / Max / Ultra)** | `cachy-llama-${TAG}-bin-macos-metal-arm64.tar.gz` |
 
 ---
 
@@ -136,10 +135,9 @@ cd cachy-llama
 
 ## 🌟 Key Architecture & Portability Features
 
-- **Zero Host ROCm Dependency**: Standalone Linux and Windows packages bundle all required ROCm runtime libraries (`rocblas.dll` / `.so`, `hipblaslt.dll` / `.so`, `amdhip64`, `libamd_comgr`, `origami`, `rocm_kpack`, etc.).
+- **Zero Host ROCm Dependency**: Standalone Linux packages bundle all required ROCm runtime libraries (`rocblas.so`, `hipblaslt.so`, `amdhip64`, `libamd_comgr`, `origami`, `rocm_kpack`, etc.).
 - **`$ORIGIN` RPATH Patchelfing**: Linux binaries are dynamically linked against their sibling libraries in the same directory using `patchelf --set-rpath '$ORIGIN'`, ensuring zero library collisions with system packages on SteamOS, Bazzite, CachyOS, Fedora, or Ubuntu.
 - **AMD TheRock Multi-Arch Dynamic Scraping**: Automatically checks `https://rocm.nightlies.amd.com/tarball-multi-arch/` to compile against the newest daily AMD ROCm toolchain.
-- **Windows Toolchain Compatibility**: Automatically applies MSVC 14.4x / `windows-2022` environment pinning to eliminate compiler collisions between Clang HIP and MSVC headers.
 - **Sequential Versioning**: Automatically manages sequential release tags (`b1001`, `b1002`...) matching upstream llama.cpp patterns.
 
 ---
@@ -148,15 +146,15 @@ cd cachy-llama
 
 | Workflow | Schedule | Description |
 | :--- | :--- | :--- |
-| **[`build-cachyllama-rocm.yml`](.github/workflows/build-cachyllama-rocm.yml)** | `0 13 * * *` (Daily) | Automated nightly ROCm multi-arch builder for Windows & Ubuntu across all gfx targets. |
-| **[`build-cachyllama-all.yml`](.github/workflows/build-cachyllama-all.yml)** | `0 2 * * *` (Daily) | Multi-backend release matrix (Linux Vulkan RADV, CPU x64/arm64, CUDA sm_75-121, Metal). |
-| **[`build-llama-ai-bundle.yml`](.github/workflows/build-llama-ai-bundle.yml)** | `0 4 * * *` (Daily) | Turnkey `llama-ai` distribution bundle assembler. |
+| **[`build-cachyllama-rocm.yml`](.github/workflows/build-cachyllama-rocm.yml)** | `0 13 * * *` (Daily) | Automated nightly ROCm multi-arch builder for Ubuntu across all gfx targets. |
+| **[`build-cachyllama-all.yml`](.github/workflows/build-cachyllama-all.yml)** | `0 2 * * *` (Daily) | Multi-backend release matrix (Linux Vulkan RADV, CPU x64/arm64, CUDA sm_75-121). |
+| **[`build-llama-ai-bundle.yml`](.github/workflows/build-llama-ai-bundle.yml)** | `0 4 * * *` (Daily) | Turnkey `llama-ai` distribution bundle assembler (Linux x64). |
 | **[`test-cachyllama-rocm.yml`](.github/workflows/test-cachyllama-rocm.yml)** | Post-Build / Manual | Automated GPU offload and prompt execution smoke test harness. |
 
 ### Manual Dispatch Parameters
 
 Workflows can be dispatched on-demand via the **Actions** tab with custom inputs:
-- `operating_systems`: comma-separated (`windows,ubuntu`)
+- `operating_systems`: comma-separated (`ubuntu`)
 - `gfx_target`: AMD GPU architectures (`gfx1151,gfx1150,gfx120X,gfx110X,gfx103X,gfx90a,gfx908`)
 - `rocm_version`: version string or `latest` (auto-detected from AMD TheRock)
 - `cachyllama_version`: branch, tag, or commit hash in `fewtarius/CachyLLama`

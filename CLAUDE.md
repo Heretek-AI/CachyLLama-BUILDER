@@ -39,7 +39,7 @@ python3 scripts/generate_release_notes.py --tag b1001 --cachyllama-commit master
 gh release list
 
 # Trigger nightly ROCm build workflow manually
-gh workflow run build-cachyllama-rocm.yml -f operating_systems=ubuntu,windows -f gfx_target=gfx1151,gfx1150,gfx110X
+gh workflow run build-cachyllama-rocm.yml -f operating_systems=ubuntu -f gfx_target=gfx1151,gfx1150,gfx110X
 
 # Trigger multi-backend release workflow manually
 gh workflow run build-cachyllama-all.yml

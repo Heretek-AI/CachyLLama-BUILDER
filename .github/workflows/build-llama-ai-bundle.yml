@@ -88,53 +88,8 @@ jobs:
           name: llama-ai-linux-x64-bundle.tar.gz
           path: llama-ai-linux-x64-bundle.tar.gz
 
-  build-bundle-macos:
-    runs-on: macos-14
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Clone llama-ai repository
-        run: |
-          git clone --depth 1 --branch "${{ github.event.inputs.llama_ai_version || 'main' }}" https://github.com/fewtarius/llama-ai.git llama-ai-dist
-
-      - name: Clone and Build CachyLLama (Metal Backend)
-        run: |
-          git clone --depth 1 --branch "${{ github.event.inputs.cachyllama_version || 'master' }}" https://github.com/fewtarius/CachyLLama.git CachyLLama
-          cd CachyLLama
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_METAL=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
-            -DCMAKE_INSTALL_RPATH='@loader_path' \
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_SERVER=ON
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: Assemble macOS Bundle
-        run: |
-          mkdir -p llama-ai-dist/src/cachy-llama-metal/build/bin
-          cp -r CachyLLama/build/bin/* llama-ai-dist/src/cachy-llama-metal/build/bin/
-          mkdir -p llama-ai-dist/bin
-          cp -r CachyLLama/build/bin/* llama-ai-dist/bin/
-
-          chmod +x llama-ai-dist/llama-run.sh
-          chmod +x llama-ai-dist/scripts/*.sh || true
-
-          tar -czvf llama-ai-macos-arm64-bundle.tar.gz -C llama-ai-dist .
-
-      - name: Upload macOS Bundle Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: llama-ai-macos-arm64-bundle.tar.gz
-          path: llama-ai-macos-arm64-bundle.tar.gz
-
   release:
-    needs: [build-bundle-linux, build-bundle-macos]
+    needs: [build-bundle-linux]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -167,10 +122,6 @@ jobs:
           
           if [ -f "./bundle-artifacts/llama-ai-linux-x64-bundle.tar.gz/llama-ai-linux-x64-bundle.tar.gz" ]; then
             cp ./bundle-artifacts/llama-ai-linux-x64-bundle.tar.gz/llama-ai-linux-x64-bundle.tar.gz "./release-bundles/llama-ai-${TAG}-linux-x64.tar.gz"
-          fi
-          
-          if [ -f "./bundle-artifacts/llama-ai-macos-arm64-bundle.tar.gz/llama-ai-macos-arm64-bundle.tar.gz" ]; then
-            cp ./bundle-artifacts/llama-ai-macos-arm64-bundle.tar.gz/llama-ai-macos-arm64-bundle.tar.gz "./release-bundles/llama-ai-${TAG}-macos-arm64.tar.gz"
           fi
           
           ls -la ./release-bundles/

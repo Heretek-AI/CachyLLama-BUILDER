@@ -206,98 +206,8 @@ jobs:
           name: cachy-llama-bin-ubuntu-cuda-sm_${{ matrix.sm }}-x64.tar.gz
           path: cachy-llama-bin-ubuntu-cuda-sm_${{ matrix.sm }}-x64.tar.gz
 
-  windows-cpu:
-    runs-on: windows-2022
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Clone CachyLLama
-        shell: powershell
-        run: |
-          git clone --depth 1 --branch "${{ env.CACHYLLAMA_VERSION }}" "${{ env.CACHYLLAMA_REPO }}" CachyLLama
-
-      - name: Patch CachyLLama for Windows Compatibility
-        shell: powershell
-        run: |
-          python scripts/patch_windows_compat.py CachyLLama
-
-      - name: Build Windows CPU
-        shell: cmd
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cd CachyLLama
-          cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j %NUMBER_OF_PROCESSORS%
-
-      - name: Verify Windows CPU Binaries
-        shell: powershell
-        run: |
-          $binDir = "CachyLLama\build\bin\Release"
-          $llamaCli = Join-Path $binDir "llama-cli.exe"
-          if (-not (Test-Path $llamaCli)) {
-            Write-Error "llama-cli.exe missing!"
-            exit 1
-          }
-          $helpText = & $llamaCli --help 2>&1
-          $helpText | Select-Object -First 10 | Out-Host
-          Write-Host "Windows CPU binary verification successful!"
-
-      - name: Pack artifacts
-        shell: powershell
-        run: |
-          Copy-Item CachyLLama\LICENSE CachyLLama\build\bin\Release\
-          Compress-Archive -Path CachyLLama\build\bin\Release\* -DestinationPath cachy-llama-bin-windows-cpu-x64.zip
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: cachy-llama-bin-windows-cpu-x64.zip
-          path: cachy-llama-bin-windows-cpu-x64.zip
-
-  macos-metal:
-    runs-on: macos-14
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Clone CachyLLama
-        run: |
-          git clone --depth 1 --branch "${{ env.CACHYLLAMA_VERSION }}" "${{ env.CACHYLLAMA_REPO }}" CachyLLama
-
-      - name: Build macOS Metal
-        run: |
-          cd CachyLLama
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_METAL=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
-            -DCMAKE_INSTALL_RPATH='@loader_path' \
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: Verify macOS Metal Binaries
-        run: |
-          cd CachyLLama/build/bin
-          ./llama-cli --help | head -n 10
-          ./llama-server --help | head -n 10
-          echo "macOS Metal binary verification successful!"
-
-      - name: Pack artifacts
-        run: |
-          cp CachyLLama/LICENSE CachyLLama/build/bin/
-          tar -czvf cachy-llama-bin-macos-metal-arm64.tar.gz -C CachyLLama/build/bin .
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: cachy-llama-bin-macos-metal-arm64.tar.gz
-          path: cachy-llama-bin-macos-metal-arm64.tar.gz
-
   release:
-    needs: [ubuntu-vulkan, ubuntu-cpu, ubuntu-cuda, windows-cpu, macos-metal]
+    needs: [ubuntu-vulkan, ubuntu-cpu, ubuntu-cuda]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -343,9 +253,8 @@ jobs:
               --title "CachyLLama $TAG (Multi-Backend)" \
               --notes "### CachyLLama Multi-Backend Release $TAG
               - **Vulkan RADV**: Linux AMD APU / dGPU acceleration
-              - **CPU**: Linux & Windows x64 / ARM64
-              - **CUDA**: NVIDIA GPU support (sm_75 to sm_121)
-              - **Metal**: Apple Silicon macOS acceleration" \
+              - **CPU**: Linux x64 / ARM64
+              - **CUDA**: NVIDIA GPU support (sm_75 to sm_121)" \
               ./release-files/*
           fi
 
@@ -360,4 +269,5 @@ jobs:
             -f event_type="builder-release" \
             -f client_payload[builder]="cachyllama" \
             -f client_payload[release_tag]="$TAG" || echo "Note: Tap dispatch triggered or skipped if repo permissions are local"
+
 

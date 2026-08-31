@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--llama-ai-commit", default="latest", help="llama-ai commit hash")
     parser.add_argument("--rocm-version", default="N/A", help="ROCm version used (e.g. 7.14.0a20260612)")
     parser.add_argument("--targets", default="", help="Comma-separated GPU targets (e.g. gfx1151,gfx1150)")
-    parser.add_argument("--os-list", default="windows,ubuntu", help="Comma-separated OS list")
+    parser.add_argument("--os-list", default="ubuntu", help="Comma-separated OS list")
     parser.add_argument("--artifacts-dir", type=Path, default=Path("."), help="Directory containing release archives")
     parser.add_argument("--output", type=Path, default=Path("release_notes.md"), help="Output markdown file")
     args = parser.parse_args()

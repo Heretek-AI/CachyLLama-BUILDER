@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       operating_systems:
-        description: 'Operating systems to test on (comma-separated: windows,ubuntu)'
+        description: 'Operating systems to test on (ubuntu)'
         required: false
-        default: 'windows,ubuntu'
+        default: 'ubuntu'
       gfx_target:
         description: 'AMD GPU targets (comma-separated: gfx1151,gfx1150,gfx110X)'
         required: false
@@ -17,7 +17,7 @@ on:
         default: 'latest'
 
 env:
-  OPERATING_SYSTEMS: ${{ github.event.inputs.operating_systems || 'windows,ubuntu' }}
+  OPERATING_SYSTEMS: ${{ github.event.inputs.operating_systems || 'ubuntu' }}
   GFX_TARGETS: ${{ github.event.inputs.gfx_target || 'gfx1151' }}
   RELEASE_TAG: ${{ github.event.inputs.release_tag || 'latest' }}
 
@@ -25,9 +25,7 @@ jobs:
   prepare-matrix:
     runs-on: ubuntu-22.04
     outputs:
-      windows_matrix: ${{ steps.set-matrix.outputs.windows_matrix }}
       ubuntu_matrix: ${{ steps.set-matrix.outputs.ubuntu_matrix }}
-      should_test_windows: ${{ steps.set-matrix.outputs.should_test_windows }}
       should_test_ubuntu: ${{ steps.set-matrix.outputs.should_test_ubuntu }}
       latest_release_tag: ${{ steps.get-release.outputs.latest_release_tag }}
     steps:
@@ -62,59 +60,14 @@ jobs:
             | jq -s '{gfx_target: .}' \
             | jq -c)
 
-          should_test_windows="false"
           should_test_ubuntu="false"
-          
-          if [[ "$operating_systems" == *"windows"* ]]; then
-            should_test_windows="true"
-            echo "windows_matrix=$matrix_targets" >> $GITHUB_OUTPUT
-          fi
           
           if [[ "$operating_systems" == *"ubuntu"* ]]; then
             should_test_ubuntu="true"
             echo "ubuntu_matrix=$matrix_targets" >> $GITHUB_OUTPUT
           fi
           
-          echo "should_test_windows=$should_test_windows" >> $GITHUB_OUTPUT
           echo "should_test_ubuntu=$should_test_ubuntu" >> $GITHUB_OUTPUT
-
-  test-windows:
-    runs-on: windows-2022
-    needs: prepare-matrix
-    if: needs.prepare-matrix.outputs.should_test_windows == 'true'
-    strategy:
-      matrix: ${{ fromJson(needs.prepare-matrix.outputs.windows_matrix) }}
-      fail-fast: false
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download release asset
-        shell: powershell
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag = "${{ needs.prepare-matrix.outputs.latest_release_tag }}"
-          $target = "${{ matrix.gfx_target }}"
-          $asset = "cachy-llama-${tag}-windows-rocm-${target}-x64.zip"
-          Write-Host "Downloading $asset from release $tag..."
-          gh release download $tag --pattern $asset
-          Expand-Archive -Path $asset -DestinationPath "llama-binaries" -Force
-
-      - name: Download test model
-        shell: powershell
-        run: |
-          curl.exe -L -o Qwen3-0.6B-Q4_0.gguf "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_0.gguf?download=true"
-
-      - name: Test CachyLLama CLI
-        shell: powershell
-        run: |
-          try {
-            .\llama-binaries\llama-cli.exe -m Qwen3-0.6B-Q4_0.gguf -ngl 99 -p "I believe the meaning of life is" -st -v
-          } catch {
-            Write-Host "GPU mode failed, testing CPU mode..."
-            .\llama-binaries\llama-cli.exe -m Qwen3-0.6B-Q4_0.gguf -ngl 0 -p "I believe the meaning of life is" -n 8 -st -v
-          }
 
   test-ubuntu:
     runs-on: ubuntu-22.04
