@@ -16,8 +16,7 @@ This repository is modeled after the dual architecture of [lemonade-sdk/llamacpp
 CachyLLama-BUILDER/
 ├── .github/
 │   ├── workflows/
-│   │   ├── build-cachyllama-rocm.yml      # Dedicated ROCm nightly multi-arch builder (TheRock)
-│   │   ├── build-cachyllama-all.yml       # Multi-backend release (Vulkan, CPU, CUDA, Metal)
+│   │   ├── build-cachyllama-all.yml       # Unified ROCm & Multi-Backend release (ROCm, Vulkan, CPU, CUDA)
 │   │   ├── build-llama-ai-bundle.yml      # Turnkey llama-ai distribution bundler
 │   │   └── test-cachyllama-rocm.yml       # Post-build smoke & GPU offload test harness
 │   ├── actions/
@@ -41,10 +40,13 @@ CachyLLama-BUILDER/
 
 ## 🛠️ Workflows & CI Architecture
 
-### 1. `build-cachyllama-rocm.yml` (TheRock Multi-Arch Standalone)
+### 1. `build-cachyllama-all.yml` (Unified ROCm & Multi-Backend Release)
 - **Schedule**: `0 13 * * *` (1:00 PM UTC / 5:00 AM PST, ~2 hours after daily AMD TheRock tarballs publish).
-- **Matrix OS**: Ubuntu 22.04 (`ubuntu-22.04`).
-- **Matrix Targets**: `gfx1151`, `gfx1150`, `gfx120X`, `gfx110X`, `gfx103X`, `gfx90a`, `gfx908`.
+- **Backends & Matrix Targets**:
+  - **AMD ROCm (TheRock Nightlies)**: `gfx1151`, `gfx1150`, `gfx120X`, `gfx110X`, `gfx103X`, `gfx90a`, `gfx908`.
+  - **Linux Vulkan (x64)**: Uses `-DGGML_VULKAN=ON` (RADV driver priority for AMD APUs).
+  - **Linux CPU (x64 / ARM64)**: OpenMP, AVX2, AVX512 variants.
+  - **Linux CUDA**: Architectures `sm_75`, `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, `sm_120`.
 - **Target Mappings**:
   - `gfx110X` ➔ `gfx1100;gfx1101;gfx1102;gfx1103`
   - `gfx103X` ➔ `gfx1030;gfx1031;gfx1032;gfx1034`
@@ -54,15 +56,9 @@ CachyLLama-BUILDER/
 - **AMD TheRock Scraping**: Fetches `https://rocm.nightlies.amd.com/tarball-multi-arch/` and extracts `const files = [...]` JSON to find newest `YYYYMMDD` build date matching `therock-dist-linux-<target>-<version>.tar.gz`.
 - **Portability Layer**:
   - Linux: Copies `.so` libraries, `librocm_sysdeps_*`, `rocblas/library`, `hipblaslt/library`, and executes `patchelf --set-rpath '$ORIGIN' "$file"`.
+- **Unified Release**: A single release job generates sequential build number `bXXXX`, packages all 17 archives (ROCm ZIPs and Vulkan/CPU/CUDA tarballs), generates comprehensive release notes with checksums, and dispatches to `homebrew-tap` once.
 
-### 2. `build-cachyllama-all.yml` (Multi-Backend Release)
-- **Schedule**: `0 2 * * *` (2:00 AM UTC).
-- **Backends**:
-  - **Linux Vulkan (x64)**: Uses `-DGGML_VULKAN=ON` (RADV driver priority for AMD APUs).
-  - **Linux CPU (x64 / ARM64)**: OpenMP, AVX2, AVX512 variants.
-  - **Linux CUDA**: Architectures `sm_75`, `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, `sm_120`, `sm_121`.
-
-### 3. `build-llama-ai-bundle.yml` (Turnkey Distribution)
+### 2. `build-llama-ai-bundle.yml` (Turnkey Distribution)
 - Assembles `fewtarius/llama-ai` with pre-compiled CachyLLama binaries, the solver (`scripts/optimize.sh`), `llama-run.sh`, and systemd units.
 - Generates ready-to-run release archive: `llama-ai-${TAG}-linux-x64.tar.gz`.
 

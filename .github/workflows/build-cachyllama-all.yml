@@ -1,14 +1,42 @@
-name: Build CachyLLama Multi-Backend Release
+name: Build CachyLLama Unified Release (ROCm & Multi-Backend)
 
 on:
   schedule:
-    - cron: '0 2 * * *' # Nightly at 2:00 AM UTC
+    - cron: '0 13 * * *' # Nightly at 13:00 UTC (~2 hours after daily AMD TheRock ROCm nightlies drop)
   workflow_dispatch:
     inputs:
       cachyllama_version:
-        description: 'CachyLLama branch or tag to build'
+        description: 'CachyLLama branch, tag, or commit to build'
         required: false
         default: 'master'
+      rocm_version:
+        description: 'ROCm version to use or "latest" to auto-detect from AMD TheRock'
+        required: false
+        default: 'latest'
+      gfx_target:
+        description: 'AMD GPU targets (comma-separated: gfx1151,gfx1150,gfx120X,gfx110X,gfx103X,gfx90a,gfx908)'
+        required: false
+        default: 'gfx1151,gfx1150,gfx120X,gfx110X,gfx103X,gfx90a,gfx908'
+      build_rocm:
+        description: 'Build AMD ROCm targets'
+        required: false
+        default: true
+        type: boolean
+      build_vulkan:
+        description: 'Build Vulkan RADV target'
+        required: false
+        default: true
+        type: boolean
+      build_cpu:
+        description: 'Build CPU targets (x64 and arm64)'
+        required: false
+        default: true
+        type: boolean
+      build_cuda:
+        description: 'Build NVIDIA CUDA targets'
+        required: false
+        default: true
+        type: boolean
       create_release:
         description: 'Create a GitHub release'
         required: false
@@ -17,6 +45,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/build-cachyllama-all.yml'
+      - '.github/actions/**'
       - 'scripts/**'
 
 concurrency:
@@ -26,11 +55,225 @@ concurrency:
 env:
   CACHYLLAMA_VERSION: ${{ github.event.inputs.cachyllama_version || 'master' }}
   CACHYLLAMA_REPO: 'https://github.com/fewtarius/CachyLLama.git'
+  ROCM_VERSION: ${{ github.event.inputs.rocm_version || 'latest' }}
+  GFX_TARGETS: ${{ github.event.inputs.gfx_target || 'gfx1151,gfx1150,gfx120X,gfx110X,gfx103X,gfx90a,gfx908' }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
 
 jobs:
+  # =========================================================================
+  # ROCm Job Matrix & Compiler Pipeline
+  # =========================================================================
+  prepare-rocm-matrix:
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request' || github.event.inputs.build_rocm == 'true' || github.event.inputs.build_rocm == null
+    outputs:
+      ubuntu_matrix: ${{ steps.set-matrix.outputs.ubuntu_matrix }}
+      should_build_ubuntu: ${{ steps.set-matrix.outputs.should_build_ubuntu }}
+    steps:
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          targets="${{ env.GFX_TARGETS }}"
+          echo "Input targets: $targets"
+
+          matrix_targets=$(echo "$targets" \
+            | tr ',' '\n' \
+            | sed 's/^ *//;s/ *$//' \
+            | sed 's/^"//;s/"$//' \
+            | jq -R . \
+            | jq -s '{gfx_target: .}' \
+            | jq -c)
+
+          echo "ubuntu_matrix=$matrix_targets" >> $GITHUB_OUTPUT
+          echo "should_build_ubuntu=true" >> $GITHUB_OUTPUT
+          echo "Generated ROCm matrix: $matrix_targets"
+
+  build-rocm:
+    runs-on: ubuntu-22.04
+    needs: prepare-rocm-matrix
+    if: needs.prepare-rocm-matrix.outputs.should_build_ubuntu == 'true'
+    strategy:
+      matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.ubuntu_matrix) }}
+      fail-fast: false
+    outputs:
+      rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
+      cachyllama_commit_hash: ${{ steps.set-outputs.outputs.cachyllama_commit_hash }}
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' 'ruby.*' \
+            google-cloud-cli azure-cli google-chrome-stable firefox powershell 2>/dev/null || true
+          sudo apt-get autoremove -y
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools & patchelf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build unzip curl patchelf build-essential
+
+      - name: Download and extract ROCm from AMD TheRock
+        run: |
+          rocm_version="${{ env.ROCM_VERSION }}"
+          current_target="${{ matrix.gfx_target }}"
+          
+          s3_target="$current_target"
+          if [[ "$current_target" = "gfx103X" || "$current_target" = "gfx110X" || "$current_target" = "gfx120X" ]]; then
+            s3_target="${current_target}-all"
+            echo "Using target with -all suffix: $s3_target"
+          fi
+          
+          base_url="https://rocm.nightlies.amd.com/tarball-multi-arch"
+          if [ "$rocm_version" = "latest" ]; then
+            echo "Auto-detecting latest ROCm version for target: $current_target"
+            prefix="therock-dist-linux-${s3_target}-"
+
+            files_json=$(curl -s "$base_url/" | tr '\n' ' ' | grep -oP 'const files = \K\[.*?\](?=\s*;)')
+            if [ -z "$files_json" ]; then
+              echo "Failed to parse file index from $base_url/"
+              exit 1
+            fi
+
+            latest_file=$(echo "$files_json" | jq -r --arg p "$prefix" \
+              '[.[] | select(.name | test("^" + $p + "[0-9]+\\.[0-9]+\\.[0-9]+(a|rc)[0-9]+\\.tar\\.gz$"))] | sort_by(.name | capture("(?<d>[0-9]{8})\\.tar\\.gz$").d) | last | .name // empty')
+            if [ -z "$latest_file" ]; then
+              echo "No tarball found for prefix '$prefix' at $base_url/"
+              exit 1
+            fi
+            echo "Found latest file: $latest_file"
+
+            if [[ "$latest_file" =~ therock-dist-linux-${s3_target}-([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
+              rocm_version="${BASH_REMATCH[1]}"
+              echo "Detected latest ROCm version: $rocm_version"
+            else
+              echo "Failed to extract ROCm version from $latest_file"
+              exit 1
+            fi
+            rocm_url="$base_url/$latest_file"
+          else
+            rocm_url="$base_url/therock-dist-linux-${s3_target}-${rocm_version}.tar.gz"
+          fi
+          
+          echo "DETECTED_ROCM_VERSION=$rocm_version" >> $GITHUB_ENV
+          echo "Streaming ROCm from $rocm_url -> /opt/rocm"
+          sudo mkdir -p /opt/rocm
+          curl -sL "$rocm_url" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+
+      - name: Set ROCm environment variables
+        run: |
+          echo "HIP_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "ROCM_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "HIP_PLATFORM=amd" >> $GITHUB_ENV
+          echo "HIP_CLANG_PATH=/opt/rocm/llvm/bin" >> $GITHUB_ENV
+          echo "/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:/opt/rocm/llvm/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+
+      - name: Clone CachyLLama
+        run: |
+          cachyllama_version="${{ env.CACHYLLAMA_VERSION }}"
+          echo "Cloning CachyLLama ($cachyllama_version)..."
+          git clone --depth 1 --single-branch --branch "$cachyllama_version" "${{ env.CACHYLLAMA_REPO }}" CachyLLama
+          cd CachyLLama
+          commit_hash=$(git rev-parse --short=7 HEAD)
+          echo "CACHYLLAMA_COMMIT_HASH=$commit_hash" >> $GITHUB_ENV
+          echo "CachyLLama commit: $commit_hash"
+          git log -1 --oneline
+
+      - name: Build CachyLLama + ROCm (Linux)
+        run: |
+          current_target="${{ matrix.gfx_target }}"
+          echo "Input target: $current_target"
+          
+          if [ "$current_target" = "gfx110X" ]; then
+            mapped_target="gfx1100;gfx1101;gfx1102;gfx1103"
+          elif [ "$current_target" = "gfx103X" ]; then
+            mapped_target="gfx1030;gfx1031;gfx1032;gfx1034"
+          elif [ "$current_target" = "gfx1151" ]; then
+            mapped_target="gfx1151"
+          elif [ "$current_target" = "gfx1150" ]; then
+            mapped_target="gfx1150"
+          elif [ "$current_target" = "gfx120X" ]; then
+            mapped_target="gfx1200;gfx1201"
+          else
+            mapped_target="$current_target"
+          fi
+          echo "Mapped target: $mapped_target"
+
+          cd CachyLLama
+          mkdir build
+          cd build
+
+          cmake .. -G Ninja \
+            -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
+            -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
+            -DCMAKE_CXX_FLAGS="-I/opt/rocm/include" \
+            -DCMAKE_CROSSCOMPILING=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGPU_TARGETS="$mapped_target" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_WEBUI=OFF \
+            -DGGML_HIP=ON \
+            -DGGML_OPENMP=OFF \
+            -DGGML_RPC=ON \
+            -DGGML_HIP_ROCWMMA_FATTN=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_STATIC=OFF \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+
+          cmake --build . -j $(nproc)
+
+      - name: Bundle ROCm Core Libraries (Linux)
+        run: |
+          build_bin_path="CachyLLama/build/bin"
+          python3 scripts/gather_required_rocm_libs.py --rocm-dir /opt/rocm --dest-dir "$build_bin_path" --platform linux
+
+      - name: Set RPATH for portable distribution
+        run: |
+          cd CachyLLama/build/bin
+          for file in *.so* llama-* cachy-*; do
+            if [ -f "$file" ] && [ ! -L "$file" ]; then
+              patchelf --set-rpath '$ORIGIN' "$file" 2>/dev/null || true
+            fi
+          done
+
+      - name: Verify Linux Binaries and Dependencies
+        run: |
+          cd CachyLLama/build/bin
+          export LD_LIBRARY_PATH="$(pwd):${LD_LIBRARY_PATH:-}"
+          ./llama-cli --help | head -n 10
+          ./llama-server --help | head -n 10
+          echo "ROCm binary verification successful!"
+
+      - name: Upload ROCm build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cachy-llama-ubuntu-rocm-${{ matrix.gfx_target }}-x64
+          path: CachyLLama/build/bin/
+          retention-days: 30
+
+      - name: Set job outputs
+        id: set-outputs
+        run: |
+          rocm_version="${DETECTED_ROCM_VERSION:-${{ env.ROCM_VERSION }}}"
+          echo "rocm_version=$rocm_version" >> $GITHUB_OUTPUT
+          echo "cachyllama_commit_hash=${CACHYLLAMA_COMMIT_HASH}" >> $GITHUB_OUTPUT
+
+  # =========================================================================
+  # Vulkan RADV Backend
+  # =========================================================================
   ubuntu-vulkan:
     runs-on: ubuntu-22.04
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request' || github.event.inputs.build_vulkan == 'true' || github.event.inputs.build_vulkan == null)
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -78,8 +321,12 @@ jobs:
           name: cachy-llama-bin-ubuntu-vulkan-x64.tar.gz
           path: cachy-llama-bin-ubuntu-vulkan-x64.tar.gz
 
+  # =========================================================================
+  # CPU Backend (x64 and ARM64)
+  # =========================================================================
   ubuntu-cpu:
     runs-on: ${{ matrix.os }}
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request' || github.event.inputs.build_cpu == 'true' || github.event.inputs.build_cpu == null)
     strategy:
       fail-fast: false
       matrix:
@@ -101,18 +348,12 @@ jobs:
         run: |
           git clone --depth 1 --branch "${{ env.CACHYLLAMA_VERSION }}" "${{ env.CACHYLLAMA_REPO }}" CachyLLama
 
-      - name: Build CPU backend
+      - name: Build with CPU backend
         run: |
           cd CachyLLama
-          EXTRA_FLAGS=""
-          if [ "${{ matrix.build }}" = "x64" ]; then
-            EXTRA_FLAGS="-DGGML_CPU_ALL_VARIANTS=ON -DGGML_BACKEND_DL=ON"
-          fi
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            $EXTRA_FLAGS \
             -DGGML_NATIVE=OFF \
-            -DGGML_OPENMP=ON \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             ${{ env.CMAKE_ARGS }}
@@ -137,45 +378,48 @@ jobs:
           name: cachy-llama-bin-ubuntu-cpu-${{ matrix.build }}.tar.gz
           path: cachy-llama-bin-ubuntu-cpu-${{ matrix.build }}.tar.gz
 
+  # =========================================================================
+  # NVIDIA CUDA Backend Matrix
+  # =========================================================================
   ubuntu-cuda:
     runs-on: ubuntu-22.04
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request' || github.event.inputs.build_cuda == 'true' || github.event.inputs.build_cuda == null)
     strategy:
       fail-fast: false
       matrix:
-        sm: ${{ github.event_name == 'pull_request' && fromJSON('["89"]') || fromJSON('["75", "80", "86", "89", "90", "100", "120"]') }}
+        sm: ['75', '80', '86', '89', '90', '100', '120']
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Free disk space
+      - name: Free runner disk space
         run: |
           sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' 'ruby.*' \
             google-cloud-cli azure-cli google-chrome-stable firefox powershell 2>/dev/null || true
           sudo apt-get autoremove -y
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
           df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential
 
       - name: Install CUDA Toolkit
         run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
-          sudo apt-get install -y \
-            cuda-nvcc-12-8 \
-            cuda-cudart-dev-12-8 \
-            cuda-cccl-12-8 \
-            libcublas-dev-12-8 \
-            libcurand-dev-12-8 \
-            libnvjitlink-dev-12-8 \
-            cmake ninja-build
+          sudo apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6 cuda-driver-dev-12-6
+          echo "PATH=/usr/local/cuda/bin:$PATH" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
 
       - name: Clone CachyLLama
         run: |
           git clone --depth 1 --branch "${{ env.CACHYLLAMA_VERSION }}" "${{ env.CACHYLLAMA_REPO }}" CachyLLama
 
-      - name: Build CUDA backend
+      - name: Build with CUDA backend
         run: |
-          export PATH="/usr/local/cuda/bin:$PATH"
-          export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
           cd CachyLLama
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -206,8 +450,11 @@ jobs:
           name: cachy-llama-bin-ubuntu-cuda-sm_${{ matrix.sm }}-x64.tar.gz
           path: cachy-llama-bin-ubuntu-cuda-sm_${{ matrix.sm }}-x64.tar.gz
 
+  # =========================================================================
+  # Unified Release & Tap Dispatch
+  # =========================================================================
   release:
-    needs: [ubuntu-vulkan, ubuntu-cpu, ubuntu-cuda]
+    needs: [prepare-rocm-matrix, build-rocm, ubuntu-vulkan, ubuntu-cpu, ubuntu-cuda]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -224,7 +471,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./multi-artifacts
+          path: ./all-artifacts
 
       - name: Determine tag name
         id: tag
@@ -233,11 +480,48 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prefix: 'b'
 
-      - name: Prepare release files
+      - name: Package release files
         run: |
-          mkdir -p ./release-files
-          find ./multi-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} ./release-files/ \;
-          ls -la ./release-files/
+          mkdir -p ./release-packages
+          TAG="${{ steps.tag.outputs.tag }}"
+          targets="${{ env.GFX_TARGETS }}"
+          
+          # Package ROCm ZIP archives
+          IFS=',' read -ra TARGET_ARRAY <<< "$targets"
+          for target in "${TARGET_ARRAY[@]}"; do
+            target=$(echo "$target" | xargs)
+            artifact_dir="./all-artifacts/cachy-llama-ubuntu-rocm-${target}-x64"
+            final_archive="cachy-llama-${TAG}-ubuntu-rocm-${target}-x64.zip"
+            if [ -d "$artifact_dir" ]; then
+              echo "Packaging $final_archive..."
+              (cd "$artifact_dir" && zip -r "../../release-packages/${final_archive}" *)
+            else
+              echo "Skipping non-existent ROCm artifact: $artifact_dir"
+            fi
+          done
+
+          # Copy tar.gz archives (Vulkan, CPU, CUDA)
+          find ./all-artifacts -type f \( -name "*.tar.gz" \) -exec cp {} ./release-packages/ \;
+          
+          echo "All release packages assembled:"
+          ls -la ./release-packages/
+
+      - name: Generate release notes
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          ROCM_VERSION="${{ needs.build-rocm.outputs.rocm_version || 'latest' }}"
+          CACHYLLAMA_COMMIT="${{ needs.build-rocm.outputs.cachyllama_commit_hash || 'master' }}"
+          
+          python3 scripts/generate_release_notes.py \
+            --tag "$TAG" \
+            --cachyllama-commit "$CACHYLLAMA_COMMIT" \
+            --rocm-version "$ROCM_VERSION" \
+            --targets "${{ env.GFX_TARGETS }}" \
+            --os-list "ubuntu" \
+            --artifacts-dir "./release-packages" \
+            --output "RELEASE_NOTES.md"
+          
+          cat RELEASE_NOTES.md
 
       - name: Publish GitHub Release
         env:
@@ -246,16 +530,13 @@ jobs:
           TAG="${{ steps.tag.outputs.tag }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists. Uploading/updating release assets with --clobber..."
-            gh release upload "$TAG" ./release-files/* --clobber
+            gh release upload "$TAG" ./release-packages/* --clobber
           else
             echo "Creating new release $TAG..."
             gh release create "$TAG" \
-              --title "CachyLLama $TAG (Multi-Backend)" \
-              --notes "### CachyLLama Multi-Backend Release $TAG
-              - **Vulkan RADV**: Linux AMD APU / dGPU acceleration
-              - **CPU**: Linux x64 / ARM64
-              - **CUDA**: NVIDIA GPU support (sm_75 to sm_121)" \
-              ./release-files/*
+              --title "CachyLLama $TAG (Unified Multi-Backend & ROCm Release)" \
+              --notes-file "RELEASE_NOTES.md" \
+              ./release-packages/*
           fi
 
       - name: Trigger Homebrew Tap Formula Update
@@ -272,7 +553,5 @@ jobs:
               -f client_payload[release_tag]="$TAG"
             echo "[✓] Successfully dispatched event to Heretek-AI/homebrew-tap"
           else
-            echo "::notice title=Tap Dispatch Skipped::TAP_GITHUB_TOKEN secret is not configured in repository secrets. Cross-repository dispatch was skipped. homebrew-tap's scheduled autobump.yml workflow (runs every 4 hours) will automatically synchronize this release ($TAG). To enable instant dispatch, create a GitHub Personal Access Token (PAT) with 'repo' scope and add it as secret 'TAP_GITHUB_TOKEN'."
+            echo "::notice title=Tap Dispatch Skipped::TAP_GITHUB_TOKEN secret is not configured in repository secrets. Cross-repository dispatch was skipped. homebrew-tap's scheduled autobump.yml workflow (runs every 4 hours) will automatically synchronize this release ($TAG)."
           fi
-
-
